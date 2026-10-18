@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Intégration continue de velocite-ops.
+#
+# A FAIRE (atelier 2) : un job "images" qui, pour l'image du job batch :
+#   1. construit l'image (contexte app/services/batch) ;
+#   2. l'analyse avec Trivy et échoue sur toute vulnérabilité HIGH ou
+#      CRITICAL qui a un correctif publié (--ignore-unfixed) ;
+#   3. vérifie qu'elle ne tourne pas en root (docker image inspect).
+# Bonus, non attendu lundi : la même chose pour les autres images de app/
+# (une matrice évite de répéter le job).
+#
+# Règles de la chaîne, non négociables :
+#   - droits minimaux (permissions: contents: read) ;
+#   - actions tierces pinnées par SHA de commit, jamais par tag : en
+#     mars 2026, les tags de trivy-action ont été déplacés vers du code
+#     malveillant ;
+#   - outils installés par scripts/ci/outils.sh (versions et sha256
+#     figés).
+# ---------------------------------------------------------------------------
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    name: Image batch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Outils
+        run: bash scripts/ci/outils.sh trivy
+
+      # A FAIRE : construction, analyse, utilisateur.

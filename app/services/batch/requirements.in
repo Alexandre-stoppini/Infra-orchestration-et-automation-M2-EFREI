@@ -1,0 +1,4 @@
+# Dépendances directes du job batch. Fichier verrouillé, avec empreintes :
+#   pip-compile --generate-hashes requirements.in
+psycopg[binary]==3.3.6
+boto3==1.43.111

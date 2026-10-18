@@ -1,0 +1,30 @@
+# Secrets et states : jamais dans Git.
+app/secrets/
+*.key
+*.pem
+*.tfstate
+*.tfstate.*
+terraform.tfstate.d/
+*.tfplan
+.terraform/
+ca-*.crt
+
+# Archives d'images (docker save) : jamais dans Git.
+*.tar
+
+# Le kubeconfig écrit par le provider kind : la clé d'administration du
+# cluster. Jamais dans Git.
+infra/00-cluster/*-config
+
+# Partie cloud : la clé SSH, le kubeconfig, la copie de infra/20-env.
+infra/00-cloud-aws/.cles/
+infra/00-cloud-aws/.env-cloud/
+infra/00-cloud-aws/backend.hcl
+
+# Outils et éditeurs
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
+rendu-*.yaml

@@ -1,0 +1,294 @@
+# ---------------------------------------------------------------------------
+# VéloCité Data Platform v2 - lancement local avec Docker Compose.
+#
+# Version durcie, issue du module Sécurité 1. C'est l'existant que l'équipe
+# d'exploitation reçoit : il tourne sur un poste, pas encore sur un cluster.
+#
+#   .\scripts\init-secrets.ps1     génère les secrets (une seule fois)
+#   docker compose up -d           lance la plateforme
+#   docker compose ps              état des services
+#   docker compose down            arrête (les volumes restent)
+#   docker compose down -v         arrête et supprime les données
+#
+# Seul le frontal est publié, et seulement sur la boucle locale (127.0.0.1).
+#
+# Les images publiques sont tirées de mirror.gcr.io (copie de Docker Hub tenue
+# par Google, mêmes digests) : Docker Hub limite les téléchargements sans
+# compte par adresse IP.
+# ---------------------------------------------------------------------------
+
+# Pas "velocite" : c'est le nom du projet de Sécurité 1, dont les conteneurs
+# et les volumes (PostgreSQL 11, Redis 5) sont peut-être encore sur le poste.
+# Un nom distinct garantit que la v2 ne les touche pas.
+name: velocite-v2
+
+x-durci: &durci
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+services:
+
+  # ------------------------------------------------------------ stockages
+
+  postgres:
+    <<: *durci
+    build: {context: ./db/postgres, args: {APP_VERSION: "2.0.0"}}
+    image: velocite/postgres:2.0.0
+    # L'image tourne sous l'uid 70 (postgres) : aucune capacité ajoutée.
+    environment:
+      POSTGRES_DB: velocite
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password, pg_svc_api, pg_svc_ingest, pg_svc_batch,
+              pg_svc_seed, postgres.crt, postgres.key]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    tmpfs: [/var/run/postgresql, /tmp]
+    networks: [donnees]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d velocite"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+    pids_limit: 200
+
+  redis:
+    <<: *durci
+    image: mirror.gcr.io/library/redis:8.8.3-alpine@sha256:0b2b77d3ea5078274795e3177cdbdada8b96316684a38911d528534ed679b5ec
+    command: ["redis-server", "--aclfile", "/run/secrets/redis_users.acl",
+              "--appendonly", "yes", "--protected-mode", "yes"]
+    # Utilisateur redis de l'image (999:1000) dès le démarrage : aucune
+    # capacité ajoutée, pas de passage par root.
+    user: "999:1000"
+    secrets: [redis_users.acl, redis_sonde]
+    volumes: [redisdata:/data]
+    networks: [donnees]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(cat /run/secrets/redis_sonde) redis-cli --no-auth-warning --user sonde ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+
+  garage:
+    <<: *durci
+    image: mirror.gcr.io/dxflrs/garage:v2.4.1@sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020
+    command: ["/garage", "-c", "/etc/garage.toml", "server"]
+    secrets: [garage_rpc_secret, garage_admin_token, garage_metrics_token]
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garagedata:/var/lib/garage
+    networks: [donnees]
+    mem_limit: 256m
+
+  # ------------------------------------------------- initialisation, une fois
+
+  init-stockage:
+    <<: *durci
+    build: {context: ., dockerfile: services/init/Dockerfile, args: {APP_VERSION: "2.0.0"}}
+    image: velocite/init:2.0.0
+    command: ["stockage"]
+    restart: "no"
+    depends_on: [garage]
+    environment:
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN_FILE: /run/secrets/garage_admin_token
+      S3_API_KEY_ID_FILE: /run/secrets/s3_api_key_id
+      S3_API_SECRET_FILE: /run/secrets/s3_api_secret
+      S3_SEED_KEY_ID_FILE: /run/secrets/s3_seed_key_id
+      S3_SEED_SECRET_FILE: /run/secrets/s3_seed_secret
+      S3_BATCH_KEY_ID_FILE: /run/secrets/s3_batch_key_id
+      S3_BATCH_SECRET_FILE: /run/secrets/s3_batch_secret
+    secrets: [garage_admin_token, s3_api_key_id, s3_api_secret, s3_seed_key_id,
+              s3_seed_secret, s3_batch_key_id, s3_batch_secret]
+    networks: [donnees]
+
+  seed:
+    <<: *durci
+    image: velocite/init:2.0.0
+    command: ["seed"]
+    restart: "no"
+    depends_on:
+      init-stockage: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+    environment:
+      S3_ENDPOINT: http://garage:3900
+      S3_ACCESS_KEY_FILE: /run/secrets/s3_seed_key_id
+      S3_SECRET_KEY_FILE: /run/secrets/s3_seed_secret
+      DATABASE_URL_FILE: /run/secrets/database_url_seed
+      DATASETS_DIR: /datasets
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      SERVICE_PASSWORD_FILE: /run/secrets/service_password
+      DATASCI_PASSWORD_FILE: /run/secrets/datasci_password
+      ANALYST_PASSWORD_FILE: /run/secrets/analyst_password
+      SUPPORT_PASSWORD_FILE: /run/secrets/support_password
+    secrets: [s3_seed_key_id, s3_seed_secret, database_url_seed, ca.crt,
+              admin_password, service_password, datasci_password,
+              analyst_password, support_password]
+    networks: [donnees]
+
+  # ------------------------------------------------------------- services
+
+  api:
+    <<: *durci
+    build: {context: ./services/api, args: {APP_VERSION: "2.0.0"}}
+    image: velocite/api:2.0.0
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      seed: {condition: service_completed_successfully}
+    environment:
+      VELOCITE_ENV: local
+      DATABASE_URL_FILE: /run/secrets/database_url_api
+      REDIS_URL_FILE: /run/secrets/redis_url_api
+      S3_ENDPOINT: http://garage:3900
+      S3_ACCESS_KEY_FILE: /run/secrets/s3_api_key_id
+      S3_SECRET_KEY_FILE: /run/secrets/s3_api_secret
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      PSEUDO_KEY_FILE: /run/secrets/pseudo_key
+    secrets: [database_url_api, redis_url_api, s3_api_key_id, s3_api_secret,
+              jwt_secret, pseudo_key, ca.crt]
+    tmpfs: [/tmp]
+    networks: [appli, donnees]
+    mem_limit: 320m
+    pids_limit: 100
+
+  ingest:
+    <<: *durci
+    build: {context: ./services/ingest, args: {APP_VERSION: "2.0.0"}}
+    image: velocite/ingest:2.0.0
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url_ingest
+      INGEST_DEVICE_KEY_FILE: /run/secrets/ingest_device_key
+    secrets: [database_url_ingest, ingest_device_key, ca.crt]
+    tmpfs: [/tmp]
+    networks: [appli, donnees]
+    mem_limit: 192m
+    pids_limit: 100
+
+  nginx:
+    <<: *durci
+    build: {context: ./nginx, args: {APP_VERSION: "2.0.0"}}
+    image: velocite/nginx:2.0.0
+    depends_on:
+      api: {condition: service_healthy}
+      ingest: {condition: service_healthy}
+    ports:
+      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:8080:8080"
+    secrets:
+      - {source: nginx.crt, target: /etc/nginx/tls/tls.crt}
+      - {source: nginx.key, target: /etc/nginx/tls/tls.key}
+    tmpfs: [/tmp]
+    networks: [frontal, appli]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: 64m
+
+  loadgen:
+    <<: *durci
+    build: {context: ./services/loadgen, args: {APP_VERSION: "2.0.0"}}
+    image: velocite/loadgen:2.0.0
+    depends_on:
+      nginx: {condition: service_healthy}
+    environment:
+      FRONTAL_URL: https://nginx:8443
+      FRONTAL_CA_PATH: /run/secrets/ca.crt
+      INGEST_DEVICE_KEY_FILE: /run/secrets/ingest_device_key
+      SERVICE_PASSWORD_FILE: /run/secrets/service_password
+      DATASCI_PASSWORD_FILE: /run/secrets/datasci_password
+      EXFIL_INTERVAL: 20m
+    secrets: [ingest_device_key, service_password, datasci_password, ca.crt]
+    networks: [frontal]
+    mem_limit: 128m
+
+  # ------------------------------------------- job batch (atelier 2, à vous)
+
+  batch:
+    <<: *durci
+    profiles: [batch]
+    build: {context: ./services/batch, args: {APP_VERSION: "1.0.0"}}
+    image: velocite/batch:1.0.0
+    restart: "no"
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url_batch
+      S3_ENDPOINT: http://garage:3900
+      S3_ACCESS_KEY_FILE: /run/secrets/s3_batch_key_id
+      S3_SECRET_KEY_FILE: /run/secrets/s3_batch_secret
+      PSEUDO_KEY_FILE: /run/secrets/pseudo_key
+    secrets: [database_url_batch, s3_batch_key_id, s3_batch_secret, pseudo_key,
+              ca.crt]
+    networks: [donnees]
+
+  # -------------------------------------- contrôle du durcissement (profil)
+
+  verif:
+    profiles: [verif]
+    image: velocite/init:2.0.0
+    entrypoint: ["python", "/tests/verifier_durcissement.py"]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    volumes: [./tests:/tests:ro]
+    secrets: [ca.crt, service_password, datasci_password, support_password,
+              ingest_device_key, database_url_api, database_url_ingest,
+              redis_url_api, s3_api_key_id, s3_api_secret, s3_batch_key_id,
+              s3_batch_secret]
+    networks: [frontal, donnees]
+
+networks:
+  frontal: {}
+  appli: {}
+  donnees: {internal: true}
+
+volumes:
+  pgdata: {}
+  redisdata: {}
+  garagedata: {}
+
+secrets:
+  postgres_password:    {file: ./secrets/postgres_password}
+  pg_svc_api:           {file: ./secrets/pg_svc_api}
+  pg_svc_ingest:        {file: ./secrets/pg_svc_ingest}
+  pg_svc_batch:         {file: ./secrets/pg_svc_batch}
+  pg_svc_seed:          {file: ./secrets/pg_svc_seed}
+  database_url_api:     {file: ./secrets/database_url_api}
+  database_url_ingest:  {file: ./secrets/database_url_ingest}
+  database_url_batch:   {file: ./secrets/database_url_batch}
+  database_url_seed:    {file: ./secrets/database_url_seed}
+  redis_users.acl:      {file: ./secrets/redis_users.acl}
+  redis_sonde:          {file: ./secrets/redis_sonde}
+  redis_url_api:        {file: ./secrets/redis_url_api}
+  jwt_secret:           {file: ./secrets/jwt_secret}
+  pseudo_key:           {file: ./secrets/pseudo_key}
+  ingest_device_key:    {file: ./secrets/ingest_device_key}
+  garage_rpc_secret:    {file: ./secrets/garage_rpc_secret}
+  garage_admin_token:   {file: ./secrets/garage_admin_token}
+  garage_metrics_token: {file: ./secrets/garage_metrics_token}
+  s3_api_key_id:        {file: ./secrets/s3_api_key_id}
+  s3_api_secret:        {file: ./secrets/s3_api_secret}
+  s3_seed_key_id:       {file: ./secrets/s3_seed_key_id}
+  s3_seed_secret:       {file: ./secrets/s3_seed_secret}
+  s3_batch_key_id:      {file: ./secrets/s3_batch_key_id}
+  s3_batch_secret:      {file: ./secrets/s3_batch_secret}
+  admin_password:       {file: ./secrets/admin_password}
+  service_password:     {file: ./secrets/service_password}
+  datasci_password:     {file: ./secrets/datasci_password}
+  analyst_password:     {file: ./secrets/analyst_password}
+  support_password:     {file: ./secrets/support_password}
+  ca.crt:               {file: ./secrets/ca.crt}
+  nginx.crt:            {file: ./secrets/nginx.crt}
+  nginx.key:            {file: ./secrets/nginx.key}
+  postgres.crt:         {file: ./secrets/postgres.crt}
+  postgres.key:         {file: ./secrets/postgres.key}

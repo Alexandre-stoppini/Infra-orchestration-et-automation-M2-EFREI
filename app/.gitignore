@@ -1,0 +1,8 @@
+# Secrets locaux : générés par scripts/init-secrets, jamais versionnés.
+secrets/
+*.key
+*.tfstate
+*.tfstate.*
+.terraform/
+__pycache__/
+*.pyc

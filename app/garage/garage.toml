@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Garage - stockage objet compatible S3 de VéloCité v2 (un seul noeud).
+#
+# Remplace MinIO : l'édition communautaire n'est plus maintenue (images
+# arrêtées en octobre 2025, dépôt archivé le 25 avril 2026). Garage est
+# développé par le collectif Deuxfleurs, sous licence AGPL-3.0.
+#
+# Les secrets sont lus dans des fichiers montés, jamais écrits ici.
+# ---------------------------------------------------------------------------
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+replication_factor = 1
+
+rpc_bind_addr = "0.0.0.0:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret_file = "/run/secrets/garage_rpc_secret"
+
+# Compose local : les fichiers de secrets sont lisibles par le conteneur
+# (0644 dans un dossier en 0700). Garage exige 0600 par défaut. Sur
+# Kubernetes, les trois secrets passent par des variables d'environnement
+# (GARAGE_RPC_SECRET, GARAGE_ADMIN_TOKEN, GARAGE_METRICS_TOKEN) et cette
+# option disparaît.
+allow_world_readable_secrets = true
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "0.0.0.0:3900"
+root_domain = ".s3.garage.localhost"
+
+[admin]
+api_bind_addr = "0.0.0.0:3903"
+admin_token_file = "/run/secrets/garage_admin_token"
+metrics_token_file = "/run/secrets/garage_metrics_token"

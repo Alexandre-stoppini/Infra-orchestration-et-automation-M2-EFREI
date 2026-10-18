@@ -1,0 +1,9 @@
+# Fins de ligne : LF dans le dépôt et sur le poste. Sans ce fichier, Git pour
+# Windows convertit à sa façon, affiche un avertissement par fichier au premier
+# git add, et un script shell exécuté en CI peut casser.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
+*.tar binary
+*.gz binary

@@ -1,0 +1,7 @@
+# Dépendances directes des outils d'initialisation. Fichier verrouillé :
+#   pip-compile --generate-hashes requirements.in
+requests==2.34.2
+boto3==1.43.111
+psycopg[binary]==3.3.6
+argon2-cffi==25.1.0
+cryptography==50.0.2

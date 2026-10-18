@@ -1,0 +1,4 @@
+# Dépendance directe du générateur d'activité. Fichier verrouillé :
+#   pip-compile --generate-hashes requirements.in
+requests==2.34.2
+prometheus-client==0.26.0

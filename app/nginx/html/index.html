@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VéloCité - portail interne</title>
+<style>
+  body { font-family: Calibri, Carlito, Arial, sans-serif; background: #f6f8fa;
+         color: #1a2b33; margin: 0; }
+  header { background: #0b2a3d; color: #fff; padding: 24px 32px; }
+  header h1 { margin: 0 0 4px 0; font-weight: 300; font-size: 30px; }
+  header p { margin: 0; color: #9ec3d6; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 32px 48px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #e2e8ec; }
+  th { background: #0b2a3d; color: #fff; font-weight: 400; }
+  code { font-family: Consolas, monospace; background: #eef2f5; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VéloCité Data Platform v2</h1>
+  <p>Mobilité partagée - Bordeaux - environnement interne</p>
+</header>
+<main>
+  <p>Plateforme pédagogique. Données inventées, réseau isolé.</p>
+  <h2>Points d'entrée</h2>
+  <table>
+    <tr><th>Chemin</th><th>Service</th></tr>
+    <tr><td><code>/api/</code></td><td>API REST (comptes, trajets, statistiques)</td></tr>
+    <tr><td><code>/api/version</code></td><td>version déployée</td></tr>
+    <tr><td><code>/ingest/</code></td><td>réception de la télémétrie (clé de flotte exigée)</td></tr>
+  </table>
+</main>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# Le Dockerfile qu'on reçoit souvent. Il marche. Combien de problèmes
+# comptez-vous ? (support de cours, module 2 de la journée 1)
+FROM python:latest
+COPY . .
+RUN pip install psycopg[binary] boto3
+CMD python batch.py extract

@@ -1,0 +1,11 @@
+# Dépendances directes de l'API. Le fichier verrouillé, avec les empreintes
+# de chaque paquet, est requirements.txt : il se régénère avec
+#   pip-compile --generate-hashes requirements.in
+flask==3.1.3
+gunicorn==26.2.0
+psycopg[binary]==3.3.6
+redis==8.1.0
+boto3==1.43.111
+pyjwt==2.15.1
+argon2-cffi==25.1.0
+prometheus-client==0.26.0
