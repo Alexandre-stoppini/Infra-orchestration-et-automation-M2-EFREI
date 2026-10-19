@@ -1,0 +1,150 @@
+# ---------------------------------------------------------------------------
+# Le bilan quotidien des trajets, en Argo Workflows.
+#
+#   extract -> check -> aggregate -> publish        puis, toujours : signaler
+#
+# Chaque étape est un pod de l'image velocite/batch. Le cron de la v1 lançait
+# les quatre commandes à la suite et ne savait rien de leurs échecs.
+#
+# A FAIRE (atelier 7) : faire décider ce fichier, et non plus un humain :
+#   1. l'ordre des étapes, et l'arrêt au premier échec (template "bilan") ;
+#   2. la relance automatique, seulement quand elle a un sens : lisez les
+#      codes de sortie en tête de app/services/batch/batch.py ;
+#   3. jamais deux bilans en même temps dans un namespace ;
+#   4. l'issue publiée pour la supervision, succès comme échec (le template
+#      "signaler" existe déjà : il reste à le déclencher toujours) ;
+#   5. une durée maximale.
+#
+# Lancer à la main, pour une date donnée :
+#   argo -n velocite-dev submit --from workflowtemplate/bilan-quotidien -p date=2026-03-12 --watch
+# ---------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: bilan-quotidien
+spec:
+  entrypoint: bilan
+  serviceAccountName: bilan
+  # Le jeton Kubernetes ne va qu'aux conteneurs d'Argo (init, wait), pas au
+  # code du batch, qui n'en a pas l'usage. Sans cela, Kubernetes le
+  # monterait dans /run/secrets/kubernetes.io, à l'intérieur du volume des
+  # secrets, en lecture seule : le conteneur ne démarrerait pas.
+  automountServiceAccountToken: false
+  executor:
+    serviceAccountName: bilan
+
+  arguments:
+    parameters:
+      - name: date
+        value: ""            # vide : la veille, calculée par le job (UTC)
+        description: "Jour à traiter, AAAA-MM-JJ"
+
+  # L'étiquette qui donne aux pods leurs droits réseau (deploy/base/reseau.yaml).
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: batch
+
+  # Les pods réussis disparaissent ; ceux en échec restent pour l'enquête.
+  podGC:
+    strategy: OnPodSuccess
+  ttlStrategy:
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 604800
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: {type: RuntimeDefault}
+
+  volumes:
+    - name: tmp
+      emptyDir: {sizeLimit: 128Mi}
+    - name: secrets
+      projected:
+        defaultMode: 0440
+        sources:
+          - secret:
+              name: velocite-db
+              items:
+                - {key: database_url_batch, path: database_url_batch}
+          - secret:
+              name: velocite-garage
+              items:
+                - {key: s3_batch_key_id, path: s3_batch_key_id}
+                - {key: s3_batch_secret, path: s3_batch_secret}
+          - secret:
+              name: velocite-app
+              items:
+                - {key: pseudo_key, path: pseudo_key}
+          - configMap:
+              name: velocite-ca
+              items:
+                - {key: ca.crt, path: ca.crt}
+
+  templates:
+    - name: bilan
+      # A FAIRE : un DAG de quatre tâches (extract, check, aggregate,
+      # publish), chacune appelant le template `etape` avec son paramètre
+      # "commande", chacune dépendant de la précédente.
+      steps:
+        - - name: extract
+            template: etape
+            arguments:
+              parameters: [{name: commande, value: extract}]
+
+    # Une étape du job.
+    - name: etape
+      inputs:
+        parameters:
+          - name: commande
+      # A FAIRE : la stratégie de relance (retryStrategy). Combien d'essais,
+      # à quel rythme, et surtout pour quels codes de sortie.
+      container:
+        image: velocite/batch:1.0.0
+        imagePullPolicy: IfNotPresent
+        # La commande est explicite : l'exécuteur d'Argo ne sait pas lire le
+        # point d'entrée d'une image chargée dans kind sans registre.
+        command: [python, /app/batch.py]
+        args: ["{{inputs.parameters.commande}}", "--date", "{{workflow.parameters.date}}"]
+        env:
+          - {name: DATABASE_URL_FILE, value: /run/secrets/database_url_batch}
+          - {name: S3_ENDPOINT, value: "http://garage:3900"}
+          - {name: S3_ACCESS_KEY_FILE, value: /run/secrets/s3_batch_key_id}
+          - {name: S3_SECRET_KEY_FILE, value: /run/secrets/s3_batch_secret}
+          - {name: PSEUDO_KEY_FILE, value: /run/secrets/pseudo_key}
+          - {name: WORKFLOW_NAME, value: "{{workflow.name}}"}
+          # Injecteur de pannes temporaires, pour l'exercice sur les reprises.
+          - {name: BATCH_FAIL_RATE, value: "0"}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 500m, memory: 256Mi}
+        volumeMounts:
+          - {name: secrets, mountPath: /run/secrets, readOnly: true}
+          - {name: tmp, mountPath: /tmp}
+
+    # Exécuté à la fin, quoi qu'il arrive : dépose l'issue du bilan dans la
+    # Pushgateway, où les alertes BilanEchoue et BilanEnRetard la lisent.
+    - name: signaler
+      container:
+        image: velocite/batch:1.0.0
+        imagePullPolicy: IfNotPresent
+        command: [python, /app/batch.py]
+        args: [signaler, --statut, "{{workflow.status}}"]
+        env:
+          - name: PUSHGATEWAY_URL
+            value: "http://prometheus-prometheus-pushgateway.observabilite.svc:9091"
+          - name: POD_NAMESPACE
+            valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        resources:
+          requests: {cpu: 10m, memory: 64Mi}
+          limits: {cpu: 200m, memory: 128Mi}

@@ -1,0 +1,79 @@
+# Tests unitaires des règles : des séries inventées, minute par minute, et
+# les alertes attendues à un instant donné.
+#   promtool test rules observability/tests/alertes_test.yaml
+#
+# A FAIRE (atelier 8) : un test par alerte ajoutée. Un test qui prouve que
+# l'alerte part quand il faut, et qu'elle ne part pas quand il ne faut pas.
+
+rule_files:
+  - ../regles/enregistrement.yaml
+  - ../regles/alertes.yaml
+
+evaluation_interval: 30s
+
+tests:
+  - name: plus aucun pod prêt
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="velocite-dev", deployment="api"}'
+        values: '1x3 0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: VelociteSansReplicaPret
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: VelociteSansReplicaPret
+        exp_alerts:
+          - exp_labels:
+              severity: critique
+              namespace: velocite-dev
+              deployment: api
+            exp_annotations:
+              summary: "api n'a plus aucun pod prêt dans velocite-dev"
+              description: "kubectl -n velocite-dev get pods ; kubectl -n velocite-dev describe deploy/api"
+              runbook: docs/RUNBOOK.md#service-indisponible
+
+  - name: bilan en échec (alerte fournie)
+    interval: 1m
+    input_series:
+      - series: 'velocite_bilan_dernier_statut{env="prod", job="velocite_bilan", groupe="execution"}'
+        values: '1x5 0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BilanEchoue
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: BilanEchoue
+        exp_alerts:
+          - exp_labels:
+              severity: critique
+              env: prod
+              job: velocite_bilan
+              groupe: execution
+            exp_annotations:
+              summary: "Le dernier bilan quotidien de prod a échoué"
+              description: "argo -n velocite-prod list ; puis argo logs du workflow en échec. Code 2 : donnée invalide, ne pas relancer à l'aveugle."
+              runbook: docs/RUNBOOK.md#reprise-du-bilan
+
+  - name: mise à jour bloquée (alerte fournie)
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_condition{namespace="velocite-prod", deployment="api", condition="Progressing", status="false"}'
+        values: '0x3 1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MiseAJourBloquee
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MiseAJourBloquee
+        exp_alerts:
+          - exp_labels:
+              severity: critique
+              namespace: velocite-prod
+              deployment: api
+              condition: Progressing
+              status: "false"
+            exp_annotations:
+              summary: "La mise à jour de api n'avance plus dans velocite-prod"
+              description: "Les nouveaux pods ne deviennent pas prêts. Les anciens servent toujours. Lire les logs du nouveau pod, puis décider : corriger ou revenir en arrière."
+              runbook: docs/RUNBOOK.md#retour-arriere

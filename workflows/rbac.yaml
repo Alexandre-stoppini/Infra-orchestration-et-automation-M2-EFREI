@@ -1,0 +1,43 @@
+# Le compte de service des pods du bilan quotidien.
+#
+# Ses pods n'ont qu'une chose à dire à l'API Kubernetes : le résultat de
+# chaque étape (WorkflowTaskResult), écrit par le conteneur "wait" d'Argo.
+# Aucun droit sur les pods, les secrets ou les autres workflows.
+#
+#   kubectl -n velocite-dev apply -f workflows/
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bilan
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bilan-executeur
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [workflowtaskresults]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bilan-executeur
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bilan-executeur
+subjects:
+  - kind: ServiceAccount
+    name: bilan
+---
+# Le jeton que reçoivent les seuls conteneurs d'Argo (executor.serviceAccountName
+# dans les workflows). Argo le cherche sous ce nom exact. C'est un jeton sans
+# date d'expiration : le prix pour que le code du batch, lui, n'en ait aucun.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bilan.service-account-token
+  annotations:
+    kubernetes.io/service-account.name: bilan
+type: kubernetes.io/service-account-token
