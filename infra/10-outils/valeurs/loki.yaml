@@ -1,0 +1,88 @@
+# Loki en un seul processus, stockage sur disque du pod. Suffisant pour
+# quelques Go de logs par jour sur un poste ; un cluster de production
+# utiliserait un stockage objet et le mode distribué.
+
+deploymentMode: Monolithic
+
+loki:
+  # Image tirée de mirror.gcr.io (copie de Docker Hub tenue par Google, mêmes
+  # empreintes) : Docker Hub limite les téléchargements sans compte par adresse
+  # IP, et toute une promotion partage la même.
+  image:
+    registry: mirror.gcr.io
+  auth_enabled: false          # un seul locataire : la plateforme
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2026-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+  limits_config:
+    retention_period: 72h
+    reject_old_samples: true
+    reject_old_samples_max_age: 24h
+    volume_enabled: true
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  podSecurityContext:
+    fsGroup: 10001
+    fsGroupChangePolicy: OnRootMismatch
+    runAsGroup: 10001
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile: {type: RuntimeDefault}
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities: {drop: [ALL]}
+
+singleBinary:
+  replicas: 1
+  # Le conteneur annexe des règles n'a pas d'usage ici (les alertes sont
+  # dans Prometheus) : une image de moins à charger.
+  sidecar: false
+  persistence:
+    enabled: true
+    size: 4Gi
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 768Mi}
+  extraEnv:
+    - name: GOMEMLIMIT
+      value: 640MiB
+
+# Ni passerelle, ni caches, ni canari, ni test : un poste, un processus.
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+minio:
+  enabled: false
+
+backend: {replicas: 0}
+read: {replicas: 0}
+write: {replicas: 0}
+ingester: {replicas: 0}
+querier: {replicas: 0}
+queryFrontend: {replicas: 0}
+queryScheduler: {replicas: 0}
+distributor: {replicas: 0}
+compactor: {replicas: 0}
+indexGateway: {replicas: 0}
+bloomGateway: {replicas: 0}
+bloomPlanner: {replicas: 0}
+bloomBuilder: {replicas: 0}

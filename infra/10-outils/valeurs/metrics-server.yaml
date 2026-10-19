@@ -1,0 +1,13 @@
+# metrics-server : la consommation CPU et mémoire des pods (kubectl top, et
+# l'autoscaler horizontal de prod).
+#
+# --kubelet-insecure-tls : sur kind, les kubelets présentent un certificat
+# auto-signé que metrics-server ne peut pas vérifier. Acceptable sur un
+# cluster local à un seul poste ; jamais sur un cluster partagé, où l'on
+# fait signer les certificats des kubelets par l'autorité du cluster.
+args:
+  - --kubelet-insecure-tls
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 128Mi}

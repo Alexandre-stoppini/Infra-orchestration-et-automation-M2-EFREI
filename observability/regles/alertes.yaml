@@ -1,0 +1,63 @@
+# Règles d'alerte de VéloCité.
+#
+# Quatre alertes sont fournies : deux pour le service, deux pour le bilan. Chaque alerte porte :
+#   severity      critique (on agit maintenant) ou avertissement (on regarde
+#                 dans la journée)
+#   summary       ce qui se passe, en une ligne
+#   description   ce qu'on regarde en premier
+#   runbook       la section de docs/RUNBOOK.md à suivre
+#
+# A FAIRE (atelier 8) : au moins deux alertes de plus.
+#   1. Une alerte sur objectif de service (SLO) : 99 % des appels du client
+#      témoin (métrique velocite_client_requests_total, port 9100 du
+#      loadgen) réussissent. Une erreur est un code 5xx ou "erreur".
+#   2. Une alerte qui rend visible la salve d'extraction du compte data
+#      science (métrique velocite_rows_exported_total{role="datascientist"}).
+# Chaque alerte ajoutée a son test dans observability/tests/.
+# Vérifier : promtool check rules observability/regles/alertes.yaml
+
+groups:
+  - name: velocite-service
+    rules:
+      - alert: VelociteSansReplicaPret
+        expr: kube_deployment_status_replicas_available{namespace=~"velocite-.*", deployment=~"api|ingest|nginx"} == 0
+        for: 2m
+        labels:
+          severity: critique
+        annotations:
+          summary: "{{ $labels.deployment }} n'a plus aucun pod prêt dans {{ $labels.namespace }}"
+          description: "kubectl -n {{ $labels.namespace }} get pods ; kubectl -n {{ $labels.namespace }} describe deploy/{{ $labels.deployment }}"
+          runbook: docs/RUNBOOK.md#service-indisponible
+
+      # Fournie : la mise à jour qui n'avance plus (l'incident de l'atelier 6).
+      - alert: MiseAJourBloquee
+        expr: kube_deployment_status_condition{namespace=~"velocite-.*", condition="Progressing", status="false"} == 1
+        for: 1m
+        labels:
+          severity: critique
+        annotations:
+          summary: "La mise à jour de {{ $labels.deployment }} n'avance plus dans {{ $labels.namespace }}"
+          description: "Les nouveaux pods ne deviennent pas prêts. Les anciens servent toujours. Lire les logs du nouveau pod, puis décider : corriger ou revenir en arrière."
+          runbook: docs/RUNBOOK.md#retour-arriere
+
+  # Fournies : elles lisent l'issue que l'étape signaler du bilan dépose dans
+  # la Pushgateway (workflows/bilan-quotidien.yaml).
+  - name: velocite-bilan
+    rules:
+      - alert: BilanEchoue
+        expr: velocite_bilan_dernier_statut == 0
+        labels:
+          severity: critique
+        annotations:
+          summary: "Le dernier bilan quotidien de {{ $labels.env }} a échoué"
+          description: "argo -n velocite-{{ $labels.env }} list ; puis argo logs du workflow en échec. Code 2 : donnée invalide, ne pas relancer à l'aveugle."
+          runbook: docs/RUNBOOK.md#reprise-du-bilan
+
+      - alert: BilanEnRetard
+        expr: time() - velocite_bilan_dernier_succes_timestamp_seconds > 26 * 3600
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "Aucun bilan réussi depuis plus de 26 h dans {{ $labels.env }}"
+          description: "Le CronWorkflow est-il suspendu ? argo -n velocite-{{ $labels.env }} cron list"
+          runbook: docs/RUNBOOK.md#reprise-du-bilan

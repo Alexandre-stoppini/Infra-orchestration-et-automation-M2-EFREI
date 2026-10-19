@@ -1,0 +1,98 @@
+# Argo Workflows : un contrôleur pour tout le cluster, une interface web.
+#
+# Les droits des workflows ne sont pas créés ici : chaque environnement
+# déclare son compte de service et son rôle dans workflows/rbac.yaml. Le
+# chart ne crée donc rien dans les namespaces applicatifs.
+
+# Les images sont chargées dans kind depuis une archive (scripts/
+# charger-images.ps1) : on ne les retélécharge pas à chaque pod.
+images:
+  pullPolicy: IfNotPresent
+
+crds:
+  install: true
+  keep: true
+
+workflow:
+  serviceAccount:
+    create: false
+  rbac:
+    create: false
+
+controller:
+  workflowNamespaces: []
+  # Métriques du contrôleur, lues par Prometheus (préfixe argo_workflows_).
+  metricsConfig:
+    enabled: true
+    port: 9090
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+  # Les workflows terminés restent visibles une journée, pas indéfiniment.
+  workflowDefaults:
+    spec:
+      ttlStrategy:
+        secondsAfterCompletion: 86400
+      podGC:
+        strategy: OnPodSuccess
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  securityContext:
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    capabilities: {drop: [ALL]}
+  resources:
+    requests: {cpu: 50m, memory: 96Mi}
+    limits: {memory: 256Mi}
+
+# Le conteneur principal de chaque étape : l'image velocite/batch n'existe
+# que dans le cluster (kind load), jamais dans un registre. "Always" la
+# chercherait en ligne et échouerait.
+# Contexte de sécurité par défaut de ce conteneur : un workflow qui
+# l'oublie reste conforme au profil "restricted".
+mainContainer:
+  imagePullPolicy: IfNotPresent
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: [ALL]}
+    seccompProfile: {type: RuntimeDefault}
+
+# Les conteneurs que l'exécuteur ajoute à chaque pod de workflow (init,
+# wait) : image sans root, mêmes règles que les applications. Sans cela, un
+# namespace en "restricted" refuse les pods des workflows.
+executor:
+  image:
+    nonroot: true
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 8737
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: [ALL]}
+    seccompProfile: {type: RuntimeDefault}
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 128Mi}
+
+server:
+  # Mode "server" : l'interface s'ouvre sans jeton. Elle n'est joignable que
+  # par kubectl port-forward, donc seulement par quelqu'un qui a déjà les
+  # droits sur le cluster. Sur un cluster partagé : authModes [client] ou
+  # [sso].
+  authModes: [server]
+  serviceType: ClusterIP
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  securityContext:
+    readOnlyRootFilesystem: false
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    capabilities: {drop: [ALL]}
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {memory: 192Mi}

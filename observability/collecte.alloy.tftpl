@@ -1,0 +1,68 @@
+// ---------------------------------------------------------------------------
+// Collecte des logs par Alloy, vers Loki.
+//
+// Alloy lit les logs des pods par l'API Kubernetes (comme kubectl logs),
+// pas sur le disque des noeuds : aucun montage hostPath, le pod reste
+// conforme au profil "restricted". Le prix : un flux par conteneur ouvert
+// sur l'API, raisonnable pour quelques dizaines de pods.
+//
+// Les namespaces suivis sont fournis par OpenTofu (variable environnements).
+// ---------------------------------------------------------------------------
+
+discovery.kubernetes "pods" {
+  role = "pod"
+  namespaces {
+    names = ${namespaces}
+  }
+}
+
+discovery.relabel "pods" {
+  targets = discovery.kubernetes.pods.targets
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    target_label  = "app"
+  }
+  // Les pods d'un workflow Argo portent le nom du workflow : on le garde
+  // pour retrouver tous les logs d'une exécution du bilan.
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_workflows_argoproj_io_workflow"]
+    target_label  = "workflow"
+  }
+}
+
+loki.source.kubernetes "pods" {
+  targets    = discovery.relabel.pods.output
+  forward_to = [loki.process.cle_valeur.receiver]
+}
+
+// Les services VéloCité écrivent leurs logs en cle=valeur. On promeut
+// seulement le niveau en étiquette : une étiquette par valeur d'événement
+// ou par usager ferait exploser le nombre de flux dans Loki.
+loki.process "cle_valeur" {
+  stage.logfmt {
+    mapping = { "level" = "" }
+  }
+  stage.labels {
+    values = { "level" = "" }
+  }
+  forward_to = [loki.write.loki.receiver]
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "http://loki.observabilite.svc:3100/loki/api/v1/push"
+  }
+}

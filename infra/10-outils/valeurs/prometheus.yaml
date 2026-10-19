@@ -1,0 +1,109 @@
+# Prometheus et ses compagnons. Les règles (alertes et enregistrements)
+# viennent de observability/regles/, ajoutées par main.tf.
+#
+# Ce qui est collecté :
+#   - tout pod annoté prometheus.io/scrape: "true" (API, ingestion, client
+#     témoin, contrôleur Argo), sur le port de prometheus.io/port ;
+#   - kube-state-metrics : l'état des objets (réplicas disponibles,
+#     redémarrages, pods en échec) ;
+#   - la Pushgateway : l'issue du bilan quotidien, déposée par le job ;
+#   - les kubelets (cAdvisor) : CPU et mémoire par conteneur.
+#
+# Absent volontairement : node-exporter. Il demande hostNetwork et hostPID,
+# refusés par le profil "restricted". Sur kind, les noeuds sont des
+# conteneurs de votre poste : leurs métriques n'apprennent rien.
+
+configmapReload:
+  prometheus:
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities: {drop: [ALL]}
+    resources:
+      requests: {cpu: 5m, memory: 16Mi}
+      limits: {memory: 32Mi}
+
+server:
+  global:
+    scrape_interval: 30s
+    evaluation_interval: 30s
+    scrape_timeout: 10s
+  persistentVolume:
+    enabled: true
+    size: 4Gi
+  securityContext:
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: [ALL]}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 768Mi}
+
+alertmanager:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 512Mi
+  podSecurityContext:
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 96Mi}
+  # Aucun canal de notification : les alertes se lisent dans Alertmanager et
+  # dans Grafana. En exploitation réelle, le récepteur "astreinte" porterait
+  # une messagerie ou un outil d'astreinte.
+  config:
+    global: {}
+    receivers:
+      - name: astreinte
+    route:
+      receiver: astreinte
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+
+kube-state-metrics:
+  enabled: true
+  securityContext:
+    enabled: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities: {drop: [ALL]}
+  resources:
+    requests: {cpu: 10m, memory: 48Mi}
+    limits: {memory: 128Mi}
+
+prometheus-node-exporter:
+  enabled: false
+
+prometheus-pushgateway:
+  enabled: true
+  securityContext:
+    fsGroup: 65534
+    runAsUser: 65534
+    runAsNonRoot: true
+    seccompProfile: {type: RuntimeDefault}
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: [ALL]}
+  resources:
+    requests: {cpu: 10m, memory: 24Mi}
+    limits: {memory: 64Mi}

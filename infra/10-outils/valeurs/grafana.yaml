@@ -1,0 +1,66 @@
+# Grafana : les tableaux de bord. Tout ce qu'il affiche est du code :
+# sources de données et tableaux sont fournis par main.tf (le tableau vient
+# de observability/dashboards/). Pas de volume : un redéploiement repart des
+# fichiers versionnés, rien n'est perdu de ce qui compte.
+
+# Image tirée de mirror.gcr.io (copie de Docker Hub tenue par Google, mêmes
+# empreintes) : Docker Hub limite les téléchargements sans compte par adresse
+# IP, et toute une promotion partage la même.
+image:
+  registry: mirror.gcr.io
+
+testFramework:
+  enabled: false
+
+persistence:
+  enabled: false
+
+# Sans volume persistant, il n'y a pas de propriétaire à corriger : le
+# conteneur d'initialisation (root) n'a pas lieu d'être.
+initChownData:
+  enabled: false
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 472
+  runAsGroup: 472
+  fsGroup: 472
+  seccompProfile: {type: RuntimeDefault}
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+  seccompProfile: {type: RuntimeDefault}
+
+# Au premier démarrage, Grafana migre sa base et dépasse 256 Mi : avec
+# 256 Mi, il était tué cinq fois (OOMKilled) avant de tenir.
+resources:
+  requests: {cpu: 50m, memory: 192Mi}
+  limits: {memory: 512Mi}
+
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: velocite
+        orgId: 1
+        folder: VéloCité
+        type: file
+        disableDeletion: true
+        editable: false
+        options:
+          path: /var/lib/grafana/dashboards/velocite
+
+grafana.ini:
+  analytics:
+    check_for_updates: false
+    reporting_enabled: false
+  users:
+    allow_sign_up: false
+  auth.anonymous:
+    enabled: false
+  security:
+    cookie_samesite: strict
+    disable_gravatar: true

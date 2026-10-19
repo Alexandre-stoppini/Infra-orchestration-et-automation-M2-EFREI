@@ -1,0 +1,60 @@
+# Alloy : la collecte des logs. Sa configuration est dans
+# observability/collecte.alloy.tftpl, injectée par main.tf.
+#
+# Un seul pod (Deployment) qui lit les logs par l'API Kubernetes : pas de
+# DaemonSet, pas de montage du disque des noeuds.
+
+# Image tirée de mirror.gcr.io (copie de Docker Hub tenue par Google, mêmes
+# empreintes) : Docker Hub limite les téléchargements sans compte par adresse
+# IP, et toute une promotion partage la même.
+image:
+  registry: mirror.gcr.io
+
+crds:
+  create: false
+
+global:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 473
+    runAsGroup: 473
+    fsGroup: 473
+    seccompProfile: {type: RuntimeDefault}
+
+controller:
+  type: deployment
+  replicas: 1
+  volumes:
+    extra:
+      - name: travail
+        emptyDir: {sizeLimit: 512Mi}
+
+alloy:
+  storagePath: /var/lib/alloy
+  mounts:
+    varlog: false
+    dockercontainers: false
+    extra:
+      - name: travail
+        mountPath: /var/lib/alloy
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: {drop: [ALL]}
+  resources:
+    requests: {cpu: 50m, memory: 96Mi}
+    limits: {memory: 256Mi}
+
+configReloader:
+  resources:
+    requests: {cpu: 5m, memory: 16Mi}
+    limits: {memory: 32Mi}
+
+# Strict nécessaire : découvrir les pods et lire leurs logs. Rien sur les
+# secrets, rien sur les CRD de supervision que nous n'utilisons pas.
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "pods/log", "namespaces"]
+      verbs: ["get", "list", "watch"]

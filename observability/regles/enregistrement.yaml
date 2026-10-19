@@ -1,0 +1,8 @@
+# Règles d'enregistrement : des requêtes calculées en continu et rangées
+# sous un nom court, que les alertes et le tableau de bord relisent.
+# Convention de nommage Prometheus : niveau:métrique:opération.
+#
+# A FAIRE (atelier 8), si vos alertes en ont besoin : par exemple le taux
+# d'erreur du client témoin sur plusieurs fenêtres (5 min, 1 h).
+
+groups: []
