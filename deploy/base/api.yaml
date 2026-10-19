@@ -1,0 +1,121 @@
+# L'API : comptes, trajets, statistiques, exports pseudonymisés.
+#
+# Ce manifeste est fourni complet : il sert de modèle pour ingest, nginx et
+# loadgen (atelier 5). Lisez-le ligne à ligne avant d'écrire les autres.
+#
+# Mise à jour progressive : un pod neuf de plus (maxSurge 1), aucun ancien
+# retiré avant que le neuf soit prêt (maxUnavailable 0). Une version qui ne
+# démarre pas reste bloquée sans couper le service : c'est l'atelier 6.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 120
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: velocite/api
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: VELOCITE_ENV, value: base}
+            - {name: DATABASE_URL_FILE, value: /run/secrets/database_url_api}
+            - {name: REDIS_URL_FILE, value: /run/secrets/redis_url_api}
+            - {name: S3_ENDPOINT, value: "http://garage:3900"}
+            - {name: S3_ACCESS_KEY_FILE, value: /run/secrets/s3_api_key_id}
+            - {name: S3_SECRET_KEY_FILE, value: /run/secrets/s3_api_secret}
+            - {name: JWT_SECRET_FILE, value: /run/secrets/jwt_secret}
+            - {name: PSEUDO_KEY_FILE, value: /run/secrets/pseudo_key}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metriques, containerPort: 9100}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          # Laisse au Service le temps de retirer le pod avant l'arrêt : les
+          # requêtes en cours finissent, aucune n'arrive sur un pod mourant.
+          lifecycle:
+            preStop:
+              sleep: {seconds: 5}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 384Mi}
+          volumeMounts:
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: velocite-db
+                  items:
+                    - {key: database_url_api, path: database_url_api}
+              - secret:
+                  name: velocite-redis
+                  items:
+                    - {key: redis_url_api, path: redis_url_api}
+              - secret:
+                  name: velocite-garage
+                  items:
+                    - {key: s3_api_key_id, path: s3_api_key_id}
+                    - {key: s3_api_secret, path: s3_api_secret}
+              - secret:
+                  name: velocite-app
+                  items:
+                    - {key: jwt_secret, path: jwt_secret}
+                    - {key: pseudo_key, path: pseudo_key}
+              - configMap:
+                  name: velocite-ca
+                  items:
+                    - {key: ca.crt, path: ca.crt}

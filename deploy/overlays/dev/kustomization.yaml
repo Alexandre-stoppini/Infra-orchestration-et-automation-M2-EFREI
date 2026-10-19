@@ -1,0 +1,21 @@
+# Environnement de développement.
+#   kubectl apply -k deploy/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: velocite-dev
+
+resources:
+  - ../../base
+
+# La version de l'API en service aujourd'hui.
+images:
+  - name: velocite/api
+    newTag: 2.1.0
+
+# A FAIRE (atelier 5) :
+#   1. publier le frontal sur le poste : le Service nginx en type NodePort,
+#      port de noeud 30443 (infra/00-cluster le publie sur localhost:8443) ;
+#   2. donner à l'API son nom d'environnement : VELOCITE_ENV=dev.
+# Deux correctifs (patches), un fichier chacun. Vérifier le rendu avant
+# d'appliquer : kubectl kustomize deploy/overlays/dev

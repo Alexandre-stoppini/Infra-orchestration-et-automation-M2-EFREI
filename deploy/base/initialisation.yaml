@@ -1,0 +1,104 @@
+# Initialisation, une fois par environnement :
+#   1. stockage : disposition Garage, clés S3 par service, buckets et droits ;
+#   2. seed     : pièces KYC et jeu de données, mots de passe des comptes fixes.
+#
+# Les deux étapes sont idempotentes : relancer le Job ne casse rien. Un Job
+# terminé ne se relance pas tout seul ; pour le rejouer :
+#   kubectl -n velocite-dev delete job initialisation
+#   kubectl apply -k deploy/overlays/dev
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: initialisation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: initialisation
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: stockage
+          image: velocite/init
+          imagePullPolicy: IfNotPresent
+          args: [stockage]
+          env:
+            - {name: GARAGE_ADMIN_URL, value: "http://garage:3903"}
+            - {name: GARAGE_ADMIN_TOKEN_FILE, value: /run/secrets/garage_admin_token}
+            - {name: S3_API_KEY_ID_FILE, value: /run/secrets/s3_api_key_id}
+            - {name: S3_API_SECRET_FILE, value: /run/secrets/s3_api_secret}
+            - {name: S3_SEED_KEY_ID_FILE, value: /run/secrets/s3_seed_key_id}
+            - {name: S3_SEED_SECRET_FILE, value: /run/secrets/s3_seed_secret}
+            - {name: S3_BATCH_KEY_ID_FILE, value: /run/secrets/s3_batch_key_id}
+            - {name: S3_BATCH_SECRET_FILE, value: /run/secrets/s3_batch_secret}
+          securityContext: &durci
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: &ressources
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts: &montages
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: seed
+          image: velocite/init
+          imagePullPolicy: IfNotPresent
+          args: [seed]
+          env:
+            - {name: S3_ENDPOINT, value: "http://garage:3900"}
+            - {name: S3_ACCESS_KEY_FILE, value: /run/secrets/s3_seed_key_id}
+            - {name: S3_SECRET_KEY_FILE, value: /run/secrets/s3_seed_secret}
+            - {name: DATABASE_URL_FILE, value: /run/secrets/database_url_seed}
+            - {name: DATASETS_DIR, value: /datasets}
+            - {name: ADMIN_PASSWORD_FILE, value: /run/secrets/admin_password}
+            - {name: SERVICE_PASSWORD_FILE, value: /run/secrets/service_password}
+            - {name: DATASCI_PASSWORD_FILE, value: /run/secrets/datasci_password}
+            - {name: ANALYST_PASSWORD_FILE, value: /run/secrets/analyst_password}
+            - {name: SUPPORT_PASSWORD_FILE, value: /run/secrets/support_password}
+          securityContext: *durci
+          resources: *ressources
+          volumeMounts: *montages
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: velocite-garage
+                  items:
+                    - {key: garage_admin_token, path: garage_admin_token}
+                    - {key: s3_api_key_id, path: s3_api_key_id}
+                    - {key: s3_api_secret, path: s3_api_secret}
+                    - {key: s3_seed_key_id, path: s3_seed_key_id}
+                    - {key: s3_seed_secret, path: s3_seed_secret}
+                    - {key: s3_batch_key_id, path: s3_batch_key_id}
+                    - {key: s3_batch_secret, path: s3_batch_secret}
+              - secret:
+                  name: velocite-db
+                  items:
+                    - {key: database_url_seed, path: database_url_seed}
+              - secret:
+                  name: velocite-app
+                  items:
+                    - {key: admin_password, path: admin_password}
+                    - {key: service_password, path: service_password}
+                    - {key: datasci_password, path: datasci_password}
+                    - {key: analyst_password, path: analyst_password}
+                    - {key: support_password, path: support_password}
+              - configMap:
+                  name: velocite-ca
+                  items:
+                    - {key: ca.crt, path: ca.crt}

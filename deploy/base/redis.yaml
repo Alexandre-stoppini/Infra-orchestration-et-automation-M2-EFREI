@@ -1,0 +1,76 @@
+# Redis : limiteur de tentatives de connexion et cache des statistiques.
+# Rien de durable : un volume temporaire suffit (perdre Redis, c'est remettre
+# les compteurs à zéro et vider le cache).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: mirror.gcr.io/library/redis:8.8.3-alpine@sha256:0b2b77d3ea5078274795e3177cdbdada8b96316684a38911d528534ed679b5ec
+          imagePullPolicy: IfNotPresent
+          command: [redis-server, --aclfile, /run/secrets/redis_users.acl,
+                    --appendonly, "yes", --protected-mode, "yes"]
+          ports:
+            - {name: redis, containerPort: 6379}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            exec:
+              command: [sh, -c, 'REDISCLI_AUTH="$(cat /run/secrets/redis_sonde)" redis-cli --no-auth-warning --user sonde ping | grep -q PONG']
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: [sh, -c, 'REDISCLI_AUTH="$(cat /run/secrets/redis_sonde)" redis-cli --no-auth-warning --user sonde ping | grep -q PONG']
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          volumeMounts:
+            - {name: donnees, mountPath: /data}
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - name: donnees
+          emptyDir: {sizeLimit: 256Mi}
+        - name: secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: velocite-redis
+                  items:
+                    - {key: redis_users.acl, path: redis_users.acl}
+                    - {key: redis_sonde, path: redis_sonde}

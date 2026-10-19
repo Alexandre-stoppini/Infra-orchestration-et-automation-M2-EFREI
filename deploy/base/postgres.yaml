@@ -1,0 +1,104 @@
+# PostgreSQL : un seul pod (StatefulSet), données sur un volume persistant.
+#
+# L'image velocite/postgres porte le schéma, les données de démonstration,
+# la création des rôles par service et le point d'entrée TLS. Ici elle
+# tourne directement sous l'utilisateur postgres (uid 70) : aucune capacité
+# Linux, aucun passage par root.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          image: velocite/postgres
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: POSTGRES_DB, value: velocite}
+            - {name: POSTGRES_USER, value: postgres}
+            - {name: POSTGRES_PASSWORD_FILE, value: /run/secrets/postgres_password}
+          ports:
+            - {name: postgres, containerPort: 5432}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, velocite]}
+            periodSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, velocite]}
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, velocite]}
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          volumeMounts:
+            - {name: donnees, mountPath: /var/lib/postgresql}
+            - {name: socket, mountPath: /var/run/postgresql}
+            - {name: tmp, mountPath: /tmp}
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - name: socket
+          emptyDir: {medium: Memory, sizeLimit: 16Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: velocite-db
+                  items:
+                    - {key: postgres_password, path: postgres_password}
+                    - {key: pg_svc_api, path: pg_svc_api}
+                    - {key: pg_svc_ingest, path: pg_svc_ingest}
+                    - {key: pg_svc_batch, path: pg_svc_batch}
+                    - {key: pg_svc_seed, path: pg_svc_seed}
+              - secret:
+                  name: velocite-tls-postgres
+                  items:
+                    - {key: postgres.crt, path: postgres.crt}
+                    - {key: postgres.key, path: postgres.key}
+  volumeClaimTemplates:
+    - metadata:
+        name: donnees
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 2Gi}

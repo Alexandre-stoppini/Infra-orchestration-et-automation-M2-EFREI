@@ -1,0 +1,79 @@
+# Flux réseau autorisés. Le namespace est fermé par défaut, en entrée comme
+# en sortie (NetworkPolicy "tout-refuser", créée par OpenTofu avec le
+# namespace). Chaque politique ci-dessous ouvre un flux nommé, rien
+# d'autre. Lire ce fichier, c'est lire la matrice des flux de la plateforme.
+#
+#   poste -> nginx -> api ----> postgres, redis, garage
+#                  -> ingest -> postgres
+#   loadgen -> nginx
+#   initialisation -> garage, postgres
+#   batch (Argo) -> postgres, garage, Pushgateway, API Kubernetes
+#   Prometheus (namespace observabilite) -> métriques 9100
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nginx
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: nginx}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Le trafic du poste arrive par le port de noeud : sa source n'est pas
+    # un pod, on ne peut pas la restreindre davantage.
+    - ports:
+        - {port: 8443, protocol: TCP}
+        - {port: 8080, protocol: TCP}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: api}}
+      ports:
+        - {port: 8080, protocol: TCP}
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: ingest}}
+      ports:
+        - {port: 8081, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: api}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: nginx}}
+      ports:
+        - {port: 8080, protocol: TCP}
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observabilite}}
+      ports:
+        - {port: 9100, protocol: TCP}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: postgres}}
+      ports:
+        - {port: 5432, protocol: TCP}
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: redis}}
+      ports:
+        - {port: 6379, protocol: TCP}
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/name: garage}}
+      ports:
+        - {port: 3900, protocol: TCP}
+# A FAIRE (atelier 5) : une NetworkPolicy par service, sur le modèle des
+# deux ci-dessus, pour chaque flux du schéma en tête de fichier :
+#   ingest, loadgen, postgres, redis, garage, initialisation, batch.
+# Méthode : pour chaque service, qui a le droit d'entrer (ingress), et vers
+# qui a-t-il le droit de sortir (egress) ? Un service qu'aucun autre service
+# n'appelle (le loadgen) garde une seule entrée : Prometheus, namespace
+# observabilite, port 9100 ; sans elle, ses métriques disparaissent et
+# l'alerte de l'atelier 8 n'a plus rien à mesurer. Une base n'appelle personne : ne déclarez
+# aucun bloc egress, policyTypes suffit à tout refuser. Une liste vide
+# (egress: []) ferait voir une modification à chaque kubectl apply.
+# Les pods du bilan (batch) ont un cas particulier : en plus de postgres et
+# garage, ils sortent vers la Pushgateway (namespace observabilite, pods
+# app.kubernetes.io/name=prometheus-pushgateway, port 9091) et vers l'API
+# Kubernetes (ports 443 et 6443), dont le conteneur d'Argo a besoin.

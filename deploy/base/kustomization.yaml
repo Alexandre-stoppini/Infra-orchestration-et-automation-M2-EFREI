@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# VéloCité sur Kubernetes - socle commun à tous les environnements.
+#
+# Ce dossier ne contient aucun secret : ils sont créés par OpenTofu
+# (infra/20-env) sous ces noms, que les manifestes référencent :
+#   velocite-db, velocite-redis, velocite-app, velocite-garage,
+#   velocite-tls-nginx, velocite-tls-postgres, et la ConfigMap velocite-ca.
+#
+# On ne déploie jamais la base directement : on déploie un overlay.
+#   kubectl apply -k deploy/overlays/dev
+# ---------------------------------------------------------------------------
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: velocite
+    includeSelectors: false
+
+resources:
+  - postgres.yaml
+  - redis.yaml
+  - garage.yaml
+  - initialisation.yaml
+  - api.yaml
+  - reseau.yaml
+  # A FAIRE (atelier 5) : ingest.yaml, nginx.yaml, loadgen.yaml, sur le
+  # modèle de api.yaml. Pour chacun : Service si d'autres pods l'appellent,
+  # Deployment, sondes, ressources, contexte de sécurité, secrets montés en
+  # fichiers (la liste des secrets de chaque service : app/compose.yaml).
+
+configMapGenerator:
+  # Le suffixe de hachage ajouté au nom fait redémarrer Garage quand sa
+  # configuration change.
+  - name: garage-config
+    files:
+      - garage.toml
+
+images:
+  - name: velocite/postgres
+    newTag: 2.0.0
+  - name: velocite/init
+    newTag: 2.0.0
+  - name: velocite/api
+    newTag: 2.0.0
+  - name: velocite/ingest
+    newTag: 2.0.0
+  - name: velocite/nginx
+    newTag: 2.0.0
+  - name: velocite/loadgen
+    newTag: 2.0.0
