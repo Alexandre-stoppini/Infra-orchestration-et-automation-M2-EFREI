@@ -494,12 +494,33 @@ if ($Atelier -contains 9) {
 
 
 # ------------------------------------------------------------------ atelier 10
-# Sauvegarder, détruire, restaurer : deux scripts, une sauvegarde hors de Git,
-# les lignes du bilan revenues, la procédure dans le runbook.
+# Sauvegarder, détruire, restaurer : deux scripts, une sauvegarde hors de Git
+# qui contient la donnée du jour, une vraie panne après elle, la donnée du
+# jour revenue par la restauration, la procédure dans le runbook.
+function Sql-Dev {
+    param([string]$Sql)
+    $r = Lancer kubectl @("-n", "velocite-dev", "exec", "-i", "statefulset/postgres", "--", "sh", "-c",
+                          'PGPASSWORD=$(cat /run/secrets/postgres_password) psql -U postgres -d velocite -At -q') `
+                          -Entree $Sql
+    if ($r.Code -ne 0) { return $null }
+    return $r.Texte.Trim()
+}
+
 if ($Atelier -contains 10) {
     Titre "Atelier 10 - Sauvegarder, détruire, restaurer"
     $sv = Sans-Commentaires "scripts/sauvegarder.ps1"
     $rs = Sans-Commentaires "scripts/restaurer.ps1"
+    # Les sauvegardes qui contiennent la donnée du jour.
+    $avecDuJour = @(Get-ChildItem -Path (Join-Path $Racine "sauvegardes") -Filter "*.sql" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Length -gt 0 -and (Select-String -Path $_.FullName -SimpleMatch $DuJourEmail -Quiet) } |
+        Sort-Object LastWriteTimeUtc)
+    # La date de naissance du disque actuel de la base.
+    $pvc = Lancer kubectl @("-n", "velocite-dev", "get", "pvc", "donnees-postgres-0", "-o", "jsonpath={.metadata.creationTimestamp}")
+    $disque = $null
+    if ($pvc.Code -eq 0 -and $pvc.Texte) {
+        $disque = [DateTimeOffset]::Parse($pvc.Texte.Trim(), [Globalization.CultureInfo]::InvariantCulture).ToUnixTimeSeconds()
+    }
+
     Controle "sauvegarder.ps1 et restaurer.ps1 : plus aucun A FAIRE" {
         $sv -and $rs -and ((Texte "scripts/sauvegarder.ps1") -notmatch 'A FAIRE') -and ((Texte "scripts/restaurer.ps1") -notmatch 'A FAIRE')
     } "scripts/sauvegarder.ps1, scripts/restaurer.ps1 : chaque A FAIRE devient une commande"
@@ -512,18 +533,24 @@ if ($Atelier -contains 10) {
     Controle "sauvegardes/ ignoré par Git, aucune sauvegarde suivie" {
         ((Lancer git @("check-ignore", "-q", "sauvegardes/essai.sql")).Code -eq 0) -and -not (Lancer git @("ls-files", "sauvegardes")).Texte
     } ".gitignore : sauvegardes/ ; git rm --cached sur le fichier suivi : il contient des données personnelles"
-    Controle "Au moins une sauvegarde dans sauvegardes/" {
-        @(Get-ChildItem -Path (Join-Path $Racine "sauvegardes") -Filter "*.sql" -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 }).Count -ge 1
-    } "./scripts/sauvegarder.ps1"
-    Controle "Les lignes du 12 mars sont dans daily_region_stats (après la restauration)" {
-        $r = Lancer kubectl @("-n", "velocite-dev", "exec", "-i", "statefulset/postgres", "--", "sh", "-c",
-                              'PGPASSWORD=$(cat /run/secrets/postgres_password) psql -U postgres -d velocite -At') `
-                              -Entree "SELECT count(*) FROM daily_region_stats WHERE jour = '2026-03-12';"
-        ($r.Code -eq 0) -and ([int]($r.Texte.Trim()) -gt 0)
-    } "./scripts/restaurer.ps1, puis ./scripts/compter-bilan.ps1"
-    Controle "RUNBOOK : la section Restauration des données (ancre restauration)" {
-        ((Texte "docs/RUNBOOK.md") -match 'id="restauration"') -and (Section-Remplie "docs/RUNBOOK.md" "Restauration" "j4")
-    } "docs/RUNBOOK.md : quand, la commande, ce qu'on doit voir, le RPO et le RTO mesurés"
+    Controle "Une sauvegarde de sauvegardes/ contient la donnée du jour" {
+        $avecDuJour.Count -ge 1
+    } "./scripts/donnees-du-jour.ps1 d'abord, puis ./scripts/sauvegarder.ps1"
+    Controle "Une vraie panne après la sauvegarde : le disque de la base est plus récent qu'elle" {
+        $disque -and @($avecDuJour | Where-Object {
+            [DateTimeOffset]::new($_.LastWriteTimeUtc).ToUnixTimeSeconds() -lt $disque }).Count -ge 1
+    } "./scripts/panne.ps1, puis kubectl apply -k deploy/overlays/dev"
+    Controle ("La donnée du jour est revenue : {0} trajets, empreinte {1}" -f $DuJourTrajets, $DuJourEmpreinte) {
+        (Sql-Dev $DuJourMesure) -eq ("{0} {1}" -f $DuJourTrajets, $DuJourEmpreinte)
+    } "./scripts/restaurer.ps1, puis ./scripts/donnees-du-jour.ps1 -Verifier"
+    Controle "Elle vient de la sauvegarde : le client existait avant le disque actuel" {
+        $creation = Sql-Dev $DuJourCreation
+        $disque -and $creation -and ([long]$creation -lt $disque)
+    } "donnees-du-jour.ps1 relancé après la panne recrée le client : restaurez la sauvegarde"
+    Controle "RUNBOOK : la section Restauration des données, avec l'empreinte notée" {
+        $rb = Texte "docs/RUNBOOK.md"
+        ($rb -match 'id="restauration"') -and ($rb -match $DuJourEmpreinte) -and (Section-Remplie "docs/RUNBOOK.md" "Restauration" "j4")
+    } "docs/RUNBOOK.md : quand, les commandes, le nombre et l'empreinte attendus, le RPO et le RTO mesurés"
 }
 
 

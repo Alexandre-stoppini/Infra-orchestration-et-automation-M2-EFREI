@@ -122,3 +122,74 @@ function Test-PhraseEtat {
         throw "Phrase de passe du state absente. Faites d'abord : `$env:TF_VAR_phrase_etat = Read-Host 'Phrase du state'"
     }
 }
+
+# La donnée du jour de l'atelier 10 : un client professionnel ouvert ce
+# matin, Côté Livraisons à Mérignac, et ses 250 trajets du vendredi
+# 23 octobre 2026. scripts/donnees-du-jour.ps1 l'ajoute et l'affiche,
+# scripts/verifier.ps1 -Atelier 10 la recherche. Les accents passent en
+# U&'\00e9' : un texte envoyé à kubectl par un pipe de Windows PowerShell
+# 5.1 perdrait les siens.
+$DuJourEmail = "flotte@cote-livraisons.example"
+$DuJourClient = "Côté Livraisons (Mérignac)"
+$DuJourTrajets = 250
+$DuJourEmpreinte = "9b7904d63be2"
+
+$DuJourAjout = @'
+INSERT INTO users (email, full_name, city, region, created_at)
+SELECT 'flotte@cote-livraisons.example', U&'C\00f4t\00e9 Livraisons',
+       U&'M\00e9rignac', 'merignac', now()
+WHERE NOT EXISTS (
+    SELECT 1 FROM users WHERE email = 'flotte@cote-livraisons.example');
+INSERT INTO trips (user_id, vehicle_id, started_at, ended_at,
+                   start_lat, start_lon, end_lat, end_lon,
+                   distance_m, duration_s, price_cents, region,
+                   payment_status)
+SELECT u.id, 1 + (g * 7) % 300,
+       timestamp '2026-10-23 07:00' + g * interval '2 min',
+       timestamp '2026-10-23 07:00' + g * interval '2 min'
+           + (600 + (g * 37) % 1200) * interval '1 second',
+       44.84 + (g % 10) * 0.002, -0.58 - (g % 7) * 0.002,
+       44.85 + (g % 9) * 0.002, -0.60 + (g % 5) * 0.002,
+       1500 + (g * 53) % 4000, 600 + (g * 37) % 1200,
+       150 + (g * 11) % 400,
+       (ARRAY['bordeaux-centre', 'merignac', 'pessac-talence', 'begles',
+              'bordeaux-rive-droite'])[1 + g % 5],
+       'paid'
+FROM users u, generate_series(1, 250) AS g
+WHERE u.email = 'flotte@cote-livraisons.example'
+  AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.user_id = u.id);
+'@
+
+# Le nombre de trajets du client, puis l'empreinte de toutes leurs valeurs
+# (les 12 premiers caractères d'un md5 calculé par PostgreSQL). Une seule
+# valeur changée, et l'empreinte change.
+$DuJourMesure = @'
+SELECT count(t.id) || ' ' || left(md5(coalesce(string_agg(
+           concat_ws('|', u.email, u.full_name, u.city, t.vehicle_id,
+                     t.started_at, t.ended_at, t.distance_m, t.duration_s,
+                     t.price_cents, t.region, t.payment_status),
+           ';' ORDER BY t.started_at, t.vehicle_id), '')), 12)
+FROM users u JOIN trips t ON t.user_id = u.id
+WHERE u.email = 'flotte@cote-livraisons.example';
+'@
+
+# Le moment où le client a été créé, en secondes depuis 1970 (UTC). Plus
+# ancien que le disque de la base : il vient de la sauvegarde. Plus récent :
+# il a été ajouté de nouveau après la panne.
+$DuJourCreation = @'
+SELECT extract(epoch FROM created_at AT TIME ZONE
+               current_setting('TimeZone'))::bigint
+FROM users WHERE email = 'flotte@cote-livraisons.example';
+'@
+
+# Lance du SQL dans la base d'un environnement et rend ses lignes. Le
+# mot de passe est lu dans le pod : rien ne s'affiche à l'écran.
+function Invoke-Sql {
+    param([Parameter(Mandatory)][string]$Ns, [Parameter(Mandatory)][string]$Sql)
+    $sortie = $Sql | & kubectl -n $Ns exec -i statefulset/postgres -- `
+        sh -c 'PGPASSWORD=$(cat /run/secrets/postgres_password) psql -U postgres -d velocite -At -q -v ON_ERROR_STOP=1'
+    if ($LASTEXITCODE -ne 0) {
+        throw "La base de $Ns ne répond pas : kubectl -n $Ns get pods"
+    }
+    return @($sortie)
+}
