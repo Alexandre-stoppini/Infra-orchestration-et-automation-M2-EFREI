@@ -12,16 +12,26 @@ apt-get install -y -q docker.io
 #    certificat de l'API Kubernetes.
 IP=$(curl -sS http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
 
-# 3. A FAIRE (atelier 11) : installer k3s, puis poser le fichier témoin.
-#    - Le script officiel : curl -sfL https://get.k3s.io | ... sh -s - server
-#    - La version épinglée vient d'OpenTofu : INSTALL_K3S_VERSION="${version_k3s}"
-#      (templatefile remplace ${version_k3s} avant que la machine ne démarre).
-#    - Les options du serveur k3s :
-#        --tls-san "$IP"            le certificat de l'API vaut pour l'adresse
-#                                   publique, sinon kubectl le refuse
-#        --disable traefik          VéloCité a son propre frontal
-#        --disable servicelb        le frontal est publié en NodePort, comme
-#                                   sur kind
-#        --write-kubeconfig-mode 0600
-#    - Enfin : touch /var/lib/velocite-pret. scripts/cloud.ps1 attend ce
-#      fichier pour savoir que la machine est prête.
+# 3. Atelier 11, pièce 3 sur 3 : installer k3s (Fiche_Atelier11_J5, étape 3).
+#    La commande est déjà écrite. Trois endroits à compléter sont marqués en
+#    majuscules : remplacez chaque marque, sans toucher au reste. Les options déjà écrites retirent Traefik et le répartiteur
+#    intégré : VéloCité a son propre frontal, publié en NodePort comme sur kind.
+#
+#    3.a La version de k3s, épinglée : ne l'écrivez pas en dur. OpenTofu la
+#        passe à ce fichier sous le nom version_k3s (calcul.tf, 2.g) ; dans
+#        un fichier .tftpl, une valeur passée par templatefile s'écrit
+#        $${nom}. Gardez les guillemets.
+#    3.b Le certificat de l'API doit valoir pour l'adresse publique de la
+#        machine, sinon kubectl le refuse : la variable shell de l'étape 2,
+#        écrite $NOM, entre guillemets.
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_VERSION="A FAIRE" sh -s - server \
+  --tls-san "A FAIRE" \
+  --disable traefik \
+  --disable servicelb \
+  --write-kubeconfig-mode 0600
+
+#    3.c Le fichier témoin : scripts/cloud.ps1 attend, toutes les 15
+#        secondes, que /var/lib/velocite-pret existe pour savoir que la
+#        machine est prête. Une commande Linux qui crée un fichier vide.
+A FAIRE

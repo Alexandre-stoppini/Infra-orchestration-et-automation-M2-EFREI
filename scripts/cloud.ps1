@@ -3,8 +3,10 @@
   VéloCité chez Hetzner : le même dépôt, une autre couche 00. Quatre étapes.
 
 .DESCRIPTION
-  monter     infra\00-cloud-hetzner : pare-feu, serveur, k3s ; le contexte
-             kubectl "hetzner-<eleve>" est ajouté à ~\.kube\config.
+  monter     D'abord verifier.ps1 -Atelier 11 -AvantMonter : au moindre KO,
+             rien n'est créé. Puis infra\00-cloud-hetzner : pare-feu,
+             serveur, k3s ; le contexte kubectl "hetzner-<equipe>" est
+             ajouté à ~\.kube\config.
   deployer   Le code de app\ part sur la machine (sans app\secrets), les images
              y sont construites et chargées dans k3s. Puis infra\20-env et
              deploy\overlays\dev, SANS MODIFICATION, sur ce contexte.
@@ -16,7 +18,7 @@
   Avant la première étape, dans ce PowerShell (une fois par terminal) :
     $s = Read-Host -AsSecureString "Token Hetzner"
     $env:HCLOUD_TOKEN = [Net.NetworkCredential]::new("", $s).Password
-    $env:TF_VAR_eleve = "velocite-prenom-nom"
+    $env:TF_VAR_eleve = "velocite-equipe3"     # le numéro de votre équipe
     $env:TF_VAR_phrase_etat = Read-Host "Phrase du state"
 
 .EXAMPLE
@@ -31,7 +33,7 @@ param(
 . "$PSScriptRoot/commun.ps1"
 
 Test-PhraseEtat
-if (-not $env:TF_VAR_eleve) { throw "Définissez `$env:TF_VAR_eleve = `"velocite-prenom-nom`"." }
+if (-not $env:TF_VAR_eleve) { throw "Définissez `$env:TF_VAR_eleve = `"velocite-equipeN`" (le numéro de votre équipe)." }
 $Couche = "$Racine/infra/00-cloud-hetzner"
 $Copie20 = "$Racine/infra/00-cloud-hetzner/.env-cloud"   # copie de infra/20-env, state à part
 $Contexte = "hetzner-$($env:TF_VAR_eleve)"
@@ -50,6 +52,12 @@ switch ($Etape) {
         if (-not $env:HCLOUD_TOKEN) { throw "Token Hetzner absent : voir l'aide, Get-Help ./scripts/cloud.ps1" }
         $ip = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
         Write-Host "Adresse autorisée : $ip/32"
+        # La vérification d'avant : au moindre KO, on s'arrête ici, sans rien
+        # créer chez Hetzner.
+        & "$PSScriptRoot/verifier.ps1" -Atelier 11 -AvantMonter -MonIp $ip
+        if ($LASTEXITCODE -ne 0) {
+            throw "La vérification d'avant montage a des KO : rien n'a été créé chez Hetzner. Corrigez-les (chaque KO dit où regarder), puis relancez monter."
+        }
         Invoke-Etape "Pare-feu, machine, k3s (infra/00-cloud-hetzner)" {
             Invoke-Commande tofu "-chdir=$Couche" init -input=false
             Invoke-Commande tofu "-chdir=$Couche" apply -input=false "-var=mon_ip=$ip/32"

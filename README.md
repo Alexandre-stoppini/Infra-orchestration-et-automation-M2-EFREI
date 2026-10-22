@@ -21,7 +21,7 @@ des fichiers neufs uniquement, jamais une modification de ce que vous avez
 | `j2` | mardi | `infra/` (OpenTofu), les scripts de déploiement, `docs/DEPLOIEMENT.md`, `docs/PARAMETRES.md` |
 | `j3` | mercredi | `deploy/` (Kustomize), les tests de fumée, `docs/RUNBOOK.md` |
 | `j4` | jeudi | `workflows/` (Argo), les tests des alertes |
-| `j5` | vendredi | `observability/tests/slo_test.yaml` (atelier 9), `scripts/sauvegarder.ps1` et `scripts/restaurer.ps1` à compléter, `scripts/donnees-du-jour.ps1` et `scripts/panne.ps1` fournis (atelier 10), `infra/00-cloud-hetzner/` et `scripts/cloud.ps1` (atelier 11, hors grille) |
+| `j5` | vendredi | `observability/tests/slo_test.yaml` (atelier 9), `scripts/sauvegarder.ps1` et `scripts/restaurer.ps1` à compléter, `scripts/donnees-du-jour.ps1` et `scripts/panne.ps1` fournis (atelier 10), `infra/00-cloud-hetzner/` à compléter (`reseau.tf`, `calcul.tf`, `user_data.sh.tftpl`), `scripts/cloud.ps1` et la vérification `verifier.ps1 -Atelier 11 -AvantMonter` (atelier 11, hors grille) |
 
 ## Récupérer l'apport du jour
 

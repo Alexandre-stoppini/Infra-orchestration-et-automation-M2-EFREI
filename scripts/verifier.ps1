@@ -19,12 +19,23 @@
   .\scripts\verifier.ps1 -Atelier 1,2,3,4,5,6
   .\scripts\verifier.ps1 -Atelier 9
   .\scripts\verifier.ps1 -Atelier 10
+  .\scripts\verifier.ps1 -Atelier 11 -AvantMonter
   pwsh ./scripts/verifier.ps1 -Atelier 8          # macOS, Linux
+
+  -Atelier 11 -AvantMonter : avant de créer la machine chez Hetzner, la
+  couche infra/00-cloud-hetzner est-elle prête ? Le terminal (token,
+  identifiant de l'équipe, phrase du state), les trois pièces complètes,
+  fmt, validate, le token absent du dépôt, puis tofu plan lu en détail :
+  rien n'est créé. scripts/cloud.ps1 -Etape monter le lance d'office.
 #>
 param(
     # Texte, puis découpé : "pwsh ./scripts/verifier.ps1 -Atelier 1,2,3" depuis
     # bash passe la liste comme un seul mot.
-    [Parameter(Mandatory)][string[]]$Atelier
+    [Parameter(Mandatory)][string[]]$Atelier,
+    # Atelier 11 : les contrôles d'avant la création de la machine.
+    [switch]$AvantMonter,
+    # L'adresse du poste, déjà lue par cloud.ps1 ; sinon, api.ipify.org.
+    [string]$MonIp
 )
 . "$PSScriptRoot/commun.ps1"
 [int[]]$Atelier = @(($Atelier -join ",") -split "[,\s]+" | Where-Object { $_ } | ForEach-Object { [int]$_ })
@@ -164,6 +175,188 @@ function Titre {
     param([string]$T)
     Write-Host ""
     Write-Host "==> $T" -ForegroundColor Cyan
+}
+
+# ------------------------------------------------------------------ atelier 11, avant de monter
+# -AvantMonter : tout ce qui se vérifie AVANT de créer quoi que ce soit chez
+# Hetzner. scripts/cloud.ps1 -Etape monter le lance d'office et s'arrête au
+# moindre KO : rien n'est créé, rien n'est facturé. Le token n'est jamais
+# affiché ; le plan est écrit hors du dépôt, puis effacé.
+
+# Comme Lancer, mais garde aussi la sortie d'erreur (les messages de tofu).
+function Lancer-Tout {
+    param([string]$Programme, [string[]]$Arguments)
+    $avant = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    # tofu écrit en UTF-8 : sans cela, Windows PowerShell 5.1 abîmerait les
+    # accents des messages des garde-fous.
+    $encodage = [Console]::OutputEncoding
+    try {
+        try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+        $sortie = & $Programme @Arguments 2>&1 | ForEach-Object { "$_" }
+        $code = $LASTEXITCODE
+    } catch { $sortie = @("$_"); $code = 1 }
+    finally {
+        try { [Console]::OutputEncoding = $encodage } catch { }
+        $ErrorActionPreference = $avant
+    }
+    return [pscustomobject]@{ Code = $code; Texte = (@($sortie) -join "`n") }
+}
+
+# Les lignes qui disent pourquoi tofu s'est arrêté : "Error: ..." et le
+# message en français des garde-fous, sans le décor.
+function Extraire-Erreurs {
+    param([string]$Texte, [int]$Max = 4)
+    # Le décor de tofu : traits verticaux et coins (U+2502, U+2575, U+2577),
+    # traits horizontaux et embranchements (U+2500, U+251C).
+    $bord = "^[\s" + [char]0x2502 + [char]0x2575 + [char]0x2577 + "]+"
+    $trait = "^(on |with |\d+:|" + [char]0x2500 + "|" + [char]0x251C + "|System\.Management\.Automation)"
+    $l = @($Texte -split "`r?`n" | ForEach-Object { ($_ -replace $bord, '').Trim() } |
+        Where-Object { $_ -and $_ -notmatch $trait -and $_ -notmatch '^(local|var|self|path|each)\.\S* is ' -and $_ -notmatch '^(Diff:|[\[\]#+~"-])' })
+    $garde = @()
+    for ($i = 0; $i -lt $l.Count; $i++) {
+        if ($l[$i] -match '^Error:') {
+            # Le titre de l'erreur, puis sa première phrase (pour un garde-fou :
+            # le message en français), sur deux lignes au plus.
+            $suite = @()
+            for ($j = $i + 1; $j -lt $l.Count -and $l[$j] -notmatch '^Error:' -and $suite.Count -lt 3; $j++) { $suite += $l[$j] }
+            $garde += ($l[$i] + " " + ($suite -join " ")).Trim()
+        }
+    }
+    if (-not $garde.Count) { $garde = $l | Select-Object -Last 3 }
+    return (@($garde | Select-Object -Unique | Select-Object -First $Max) -join " | ")
+}
+
+if ($AvantMonter) {
+    if (@($Atelier).Count -ne 1 -or $Atelier[0] -ne 11) { throw "-AvantMonter ne vaut que pour l'atelier 11 : -Atelier 11 -AvantMonter" }
+    $Couche = "infra/00-cloud-hetzner"
+    $pieces = @("$Couche/reseau.tf", "$Couche/calcul.tf", "$Couche/user_data.sh.tftpl")
+    Titre "Atelier 11 - Avant de monter : la couche est-elle prête ? (rien n'est créé chez Hetzner)"
+
+    # 1. Le terminal : les trois variables que cloud.ps1 et OpenTofu lisent.
+    Controle "Le token de l'équipe est dans ce terminal (HCLOUD_TOKEN, 64 caractères)" {
+        $env:HCLOUD_TOKEN -and $env:HCLOUD_TOKEN.Length -eq 64
+    } "les deux lignes de la fiche 11, partie 1 : `$s = Read-Host -AsSecureString, puis `$env:HCLOUD_TOKEN = ... ; un token se colle en entier, sans espace"
+    Controle "L'identifiant de l'équipe (TF_VAR_eleve = velocite-equipeN)" {
+        $env:TF_VAR_eleve -cmatch '^velocite-(equipe[1-9][0-9]?|prof)$'
+    } "`$env:TF_VAR_eleve = `"velocite-equipe3`" (votre numéro, celui du message Moodle), en minuscules"
+    Controle "La phrase du state (TF_VAR_phrase_etat, 16 caractères au moins)" {
+        $env:TF_VAR_phrase_etat -and $env:TF_VAR_phrase_etat.Length -ge 16
+    } "`$env:TF_VAR_phrase_etat = Read-Host `"Phrase du state`" : la même toute l'équipe, notée hors du dépôt"
+
+    # 2. Les trois pièces : plus aucune marque à compléter.
+    $restes = @()
+    foreach ($f in $pieces) {
+        $n = 0
+        foreach ($ligne in ((Texte $f) -split "`r?`n")) {
+            $n++
+            if ($ligne -match 'A FAIRE') { $restes += "$(Split-Path -Leaf $f):$n" }
+        }
+    }
+    Controle "Les trois pièces sont complètes : plus aucune marque A FAIRE" {
+        $restes.Count -eq 0 -and (Texte "$Couche/reseau.tf") -and (Texte "$Couche/calcul.tf")
+    } ("à compléter : " + ($restes -join ", ") + " ; le commentaire au-dessus de chaque ligne dit quoi mettre")
+
+    # 3. La forme, puis la syntaxe.
+    if (-not (Test-Path (Join-Path $Racine "$Couche/.terraform"))) {
+        Lancer-Tout tofu @("-chdir=$Couche", "init", "-input=false", "-no-color") | Out-Null
+    }
+    $fmt = Lancer-Tout tofu @("-chdir=$Couche", "fmt", "-check", "-no-color")
+    Controle "tofu fmt : la mise en forme est la bonne" {
+        $fmt.Code -eq 0
+    } ("à remettre en forme : " + (($fmt.Texte -split "`r?`n" | Where-Object { $_ }) -join ", ") + " ; tofu -chdir=$Couche fmt")
+    $val = Lancer-Tout tofu @("-chdir=$Couche", "validate", "-no-color")
+    Controle "tofu validate : la syntaxe et les noms sont justes" {
+        $val.Code -eq 0
+    } ((Extraire-Erreurs $val.Texte) + " ; le message donne le fichier et la ligne")
+
+    # 4. Le script de premier démarrage : il est rendu dans la machine, le
+    #    plan n'en montre qu'une empreinte. On le lit donc ici.
+    $ud = ((Texte "$Couche/user_data.sh.tftpl") -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Controle "user_data.sh.tftpl : k3s à la version d'OpenTofu, certificat pour l'adresse publique, fichier témoin" {
+        ($ud -match 'get\.k3s\.io') -and ($ud -match 'INSTALL_K3S_VERSION="\$\{version_k3s\}"') -and
+        ($ud -match '--tls-san\s+"\$IP"') -and ($ud -match '(?m)^\s*touch\s+/var/lib/velocite-pret\s*$')
+    } "user_data.sh.tftpl, pièce 3 : la version que passe OpenTofu (3.a), l'adresse lue à l'étape 2 (3.b), le fichier témoin qu'attend cloud.ps1 (3.c)"
+
+    # 5. Le token n'est nulle part dans le dépôt, ni dans son historique.
+    Controle "Le token n'est écrit dans aucun fichier du dépôt, ni dans son historique" {
+        if (-not $env:HCLOUD_TOKEN) { return $false }
+        $fichiers = Lancer git @("grep", "-I", "-l", "--untracked", "-F", "-e", $env:HCLOUD_TOKEN)
+        $histoire = Lancer git @("log", "--all", "--oneline", "-S", $env:HCLOUD_TOKEN)
+        (-not $fichiers.Texte) -and (-not $histoire.Texte)
+    } "effacez-le du fichier ; s'il a été commité ou poussé, prévenez l'intervenant : il le révoque et vous en donne un autre"
+
+    # 6. Le plan, seulement si tout le reste est OK : il dit exactement ce que
+    #    monter créerait. Rien n'est créé.
+    if ($script:ko) {
+        $script:total++
+        $script:ko++
+        Write-Host "KO  tofu plan : pas lancé" -ForegroundColor Red
+        Write-Host "      -> corrigez d'abord les KO ci-dessus, puis relancez ce script" -ForegroundColor DarkYellow
+    } else {
+        $ip = $MonIp
+        if (-not $ip) {
+            try { $ip = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 15).Trim() } catch { $ip = "" }
+        }
+        $plan = Join-Path ([System.IO.Path]::GetTempPath()) ("velocite-avant-monter-{0}.plan" -f $PID)
+        $p = Lancer-Tout tofu @("-chdir=$Couche", "plan", "-input=false", "-no-color", "-lock=false", "-var=mon_ip=$ip/32", "-out=$plan")
+        $json = $null
+        if ($p.Code -eq 0 -and (Test-Path $plan)) {
+            $s = Lancer tofu @("-chdir=$Couche", "show", "-json", $plan)
+            if ($s.Code -eq 0) { $json = $s.Texte | ConvertFrom-Json }
+        }
+        if (Test-Path $plan) { Remove-Item $plan -Force }
+        $ligne = @($p.Texte -split "`r?`n" | Where-Object { $_ -match '^(Plan:|No changes)' }) | Select-Object -First 1
+        $actions = @()
+        if ($json) { $actions = @($json.resource_changes | ForEach-Object { @($_.change.actions) -join "," }) }
+        $ajouts = @($actions | Where-Object { $_ -eq "create" }).Count
+        $autres = @($actions | Where-Object { $_ -ne "create" -and $_ -ne "no-op" -and $_ -ne "read" }).Count
+        $deja = @($actions | Where-Object { $_ -eq "no-op" }).Count
+        Controle "tofu plan : 5 ressources à créer (clé TLS, clé SSH, fichier de clé, pare-feu, serveur), rien à modifier ni à détruire" {
+            $json -and $autres -eq 0 -and (($ajouts -eq 5) -or ($deja -gt 0 -and $ajouts + $deja -eq 5))
+        } $(if ($p.Code -ne 0) { (Extraire-Erreurs $p.Texte) + " ; adresse lue : $ip/32" } else { "le plan dit : $ligne" })
+
+        # Le détail du plan, seulement s'il a abouti : sinon, le KO du plan
+        # dit déjà pourquoi.
+        if (-not $json) {
+            Write-Host "      (le détail du pare-feu et du serveur se lira quand le plan aboutira)" -ForegroundColor DarkYellow
+        } else {
+        $res = @($json.planned_values.root_module.resources)
+        $fw = @($res | Where-Object { $_.address -eq "hcloud_firewall.k3s" } | Select-Object -First 1)
+        $srv = @($res | Where-Object { $_.address -eq "hcloud_server.k3s" } | Select-Object -First 1)
+        Controle "Le pare-feu : 22, 6443 et 30443 en entrée, chacun depuis votre seule adresse en /32" {
+            if (-not $fw) { return $false }
+            $regles = @($fw[0].values.rule)
+            $ports = @($regles | ForEach-Object { [string]$_.port } | Sort-Object)
+            (($ports -join ",") -eq "22,30443,6443") -and
+            (@($regles | Where-Object { $_.direction -ne "in" -or $_.protocol -ne "tcp" -or @($_.source_ips).Count -ne 1 -or [string]@($_.source_ips)[0] -ne "$ip/32" }).Count -eq 0)
+        } "reseau.tf, 1.a et 1.b : les trois ports de la slide 29, et votre adresse par la variable déclarée pour elle"
+        Controle "Le serveur : le nom de l'équipe, cx33, Ubuntu 24.04, un centre de données prévu" {
+            if (-not $srv) { return $false }
+            $v = $srv[0].values
+            ($v.name -ceq $env:TF_VAR_eleve) -and ($v.server_type -eq "cx33") -and ($v.image -eq "ubuntu-24.04") -and
+            (@("nbg1", "fsn1", "hel1") -contains $v.location)
+        } "calcul.tf, 2.a, 2.c et 2.d : le nom, le type et le centre de données viennent des variables de variables.tf"
+        $cfg = @($json.configuration.root_module.resources | Where-Object { $_.address -eq "hcloud_server.k3s" } | Select-Object -First 1)
+        Controle "Le serveur porte le pare-feu, la clé SSH, et la version de k3s d'OpenTofu" {
+            if (-not $cfg) { return $false }
+            $e = $cfg[0].expressions
+            (@($e.firewall_ids.references) -contains "hcloud_firewall.k3s.id") -and
+            (@($e.ssh_keys.references) -contains "hcloud_ssh_key.k3s.id") -and
+            (@($e.user_data.references) -contains "var.version_k3s")
+        } "calcul.tf, 2.e, 2.f et 2.g : l'id de la clé SSH, l'id du pare-feu de reseau.tf, la variable de la version de k3s"
+        }
+    }
+
+    Write-Host ""
+    $couleur = if ($script:ko) { "Red" } else { "Green" }
+    Write-Host ("{0} contrôles, {1} KO" -f $script:total, $script:ko) -ForegroundColor $couleur
+    if ($script:ko) {
+        Write-Host "Rien n'a été créé chez Hetzner. Corrigez chaque KO, puis relancez." -ForegroundColor DarkYellow
+        exit 1
+    }
+    Write-Host "Tout est prêt : ./scripts/cloud.ps1 -Etape monter peut créer la machine." -ForegroundColor Green
+    exit 0
 }
 
 $kubeOk = (Lancer kubectl @("get", "--raw", "/readyz")).Code -eq 0
@@ -557,8 +750,14 @@ if ($Atelier -contains 10) {
 # ------------------------------------------------------------------ atelier 11
 if ($Atelier -contains 11) {
     Titre "Atelier 11 - Le même dépôt chez Hetzner, la couche écrite par vous (hors grille)"
+    Controle "Les trois pièces sont complètes : plus aucune marque A FAIRE" {
+        $t = (Texte "infra/00-cloud-hetzner/reseau.tf") + (Texte "infra/00-cloud-hetzner/calcul.tf") + (Texte "infra/00-cloud-hetzner/user_data.sh.tftpl")
+        $t -and ($t -notmatch 'A FAIRE')
+    } "./scripts/verifier.ps1 -Atelier 11 -AvantMonter : il donne chaque ligne à compléter"
     # Les lignes de commentaire du modèle citent déjà les ports : on les retire.
-    $reseau = ((Texte "infra/00-cloud-hetzner/reseau.tf") -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    # Sans les commentaires ni les messages des garde-fous, qui citent déjà
+    # les ports et 0.0.0.0/0.
+    $reseau = ((Texte "infra/00-cloud-hetzner/reseau.tf") -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' -and $_ -notmatch '^\s*(error_message|condition)\s*=' }) -join "`n"
     Controle "reseau.tf : hcloud_firewall k3s, ports 22, 6443, 30443" {
         ($reseau -match 'resource\s+"hcloud_firewall"\s+"k3s"') -and
         (@("22", "6443", "30443" | Where-Object { ($reseau -notmatch "[`"']$_[`"']") -and ($reseau -notmatch "port\s*=\s*$_\b") }).Count -eq 0)
