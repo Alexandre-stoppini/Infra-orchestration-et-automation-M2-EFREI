@@ -1,0 +1,57 @@
+# Le test de l'alerte sur objectif (atelier 9) : une heure normale, puis une
+# coupure totale de 10 minutes, puis le retour du service.
+#   ./scripts/promtool.ps1 test rules observability/tests/slo_test.yaml
+#
+# Le client témoin appelle /api/stations une fois par seconde, soit 60
+# appels par minute :
+#   - de la minute 0 à la minute 60, tous réussissent (code 200) ;
+#   - de la minute 60 à la minute 70, l'API est coupée : tous échouent
+#     ("erreur") ;
+#   - à partir de la minute 70, tous réussissent de nouveau.
+# Les valeurs sont des compteurs, relevés chaque minute : "0+60x60" veut
+# dire 0, puis +60 à chaque minute, pendant 60 minutes ; "3600x9" veut
+# dire 3600 répété (aucune réussite pendant la coupure).
+
+rule_files:
+  - ../regles/enregistrement.yaml
+  - ../regles/alertes.yaml
+
+evaluation_interval: 30s
+
+tests:
+  - name: coupure totale de 10 minutes de l'API de dev
+    interval: 1m
+    input_series:
+      - series: >-
+          velocite_client_requests_total{namespace="velocite-dev",
+          route="/api/stations", code="200"}
+        values: '0+60x60 3600x9 3660+60x30'
+      - series: >-
+          velocite_client_requests_total{namespace="velocite-dev",
+          route="/api/stations", code="erreur"}
+        values: '0x60 60+60x9 600x30'
+    alert_rule_test:
+      # A FAIRE (atelier 9) : trois vérifications de l'alerte
+      # BudgetErreurConsommeVite, chacune avec eval_time, alertname et
+      # exp_alerts (le modèle : observability/tests/alertes_test.yaml).
+      #   - À la minute 65 : aucune alerte (exp_alerts: []).
+      #   - À la minute 72 : l'alerte, avec exactement ces labels et ces
+      #     annotations (votre règle doit porter les mêmes) :
+      #       exp_labels:
+      #         severity: critique
+      #         namespace: velocite-dev
+      #         route: /api/stations
+      #       exp_annotations:
+      #         summary: >-
+      #           velocite-dev : le budget d'erreur de /api/stations
+      #           part 14,4 fois trop vite
+      #         description: >-
+      #           Plus de 14,4 % d'échecs sur l'heure écoulée et sur les 5
+      #           dernières minutes. Le tableau de bord VéloCité, panneau
+      #           disponibilité ; puis kubectl -n velocite-dev get pods.
+      #         runbook: docs/RUNBOOK.md#budget-erreur
+      #   - À la minute 76 : plus aucune alerte.
+      # Avant de lancer promtool, dites pour chaque instant ce que vaut la
+      # part d'échecs sur 5 minutes et sur 1 heure (slide 9). Remplacez
+      # ensuite la liste vide ci-dessous par vos trois vérifications.
+      []

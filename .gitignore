@@ -17,9 +17,13 @@ ca-*.crt
 infra/00-cluster/*-config
 
 # Partie cloud : la clé SSH, le kubeconfig, la copie de infra/20-env.
-infra/00-cloud-aws/.cles/
-infra/00-cloud-aws/.env-cloud/
-infra/00-cloud-aws/backend.hcl
+# (Le state de la couche, terraform.tfstate, est déjà exclu plus haut.)
+infra/00-cloud-hetzner/.cles/
+infra/00-cloud-hetzner/.env-cloud/
+
+# Les sauvegardes de la base (atelier 10) : elles contiennent des données
+# personnelles. Jamais dans Git.
+sauvegardes/
 
 # Outils et éditeurs
 __pycache__/

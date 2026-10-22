@@ -21,7 +21,7 @@ des fichiers neufs uniquement, jamais une modification de ce que vous avez
 | `j2` | mardi | `infra/` (OpenTofu), les scripts de déploiement, `docs/DEPLOIEMENT.md`, `docs/PARAMETRES.md` |
 | `j3` | mercredi | `deploy/` (Kustomize), les tests de fumée, `docs/RUNBOOK.md` |
 | `j4` | jeudi | `workflows/` (Argo), les tests des alertes |
-| `j5` | vendredi | `infra/00-cloud-aws/` et `scripts/cloud.ps1` (atelier 10, hors grille) |
+| `j5` | vendredi | `observability/tests/slo_test.yaml` (atelier 9), `scripts/sauvegarder.ps1` et `scripts/restaurer.ps1` (atelier 10), `infra/00-cloud-hetzner/` et `scripts/cloud.ps1` (atelier 11, hors grille) |
 
 ## Récupérer l'apport du jour
 
@@ -61,7 +61,7 @@ vous écrivez au fil des ateliers.
 
 ## Les preuves
 
-A FAIRE (atelier 9) : pour chaque affirmation sur la plateforme, la
+A FAIRE (30 novembre) : pour chaque affirmation sur la plateforme, la
 commande qui la prouve. Au minimum :
 
 | Ce qu'on affirme | Commande | Ce qu'on doit voir |

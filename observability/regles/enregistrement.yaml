@@ -2,7 +2,15 @@
 # sous un nom court, que les alertes et le tableau de bord relisent.
 # Convention de nommage Prometheus : niveau:métrique:opération.
 #
-# A FAIRE (atelier 8), si vos alertes en ont besoin : par exemple le taux
-# d'erreur du client témoin sur plusieurs fenêtres (5 min, 1 h).
+# A FAIRE (atelier 9) : deux règles d'enregistrement, dans un groupe nommé
+# velocite-slo. Chacune calcule la part d'échecs vue par le client témoin
+# (velocite_client_requests_total), par namespace et par route : les appels
+# en échec (code 5xx, ou "erreur" quand l'appel n'a pas abouti) divisés par
+# tous les appels.
+#   velocite:echecs_client:ratio_rate5m   sur les 5 dernières minutes
+#   velocite:echecs_client:ratio_rate1h   sur la dernière heure
+# Modèle de la requête : l'alerte DisponibiliteSousObjectif de alertes.yaml,
+# que BudgetErreurConsommeVite remplace.
+# Vérifier : ./scripts/promtool.ps1 check rules observability/regles/enregistrement.yaml
 
 groups: []

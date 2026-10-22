@@ -9,12 +9,16 @@
   dit OK ou KO ; un KO dit où regarder. Le script sort en code 1 s'il y a eu
   au moins un KO.
 
-  Aucune phrase du state n'est demandée : tout se lit dans le dépôt, dans le
-  cluster (kubectl) et dans Docker.
+  Aucune phrase du state n'est demandée, sauf pour -Atelier 12 (la
+  préparation du 30 novembre) : ses contrôles lancent tofu plan, qui lit des
+  states chiffrés ($env:TF_VAR_phrase_etat). Le reste se lit dans le dépôt,
+  dans le cluster (kubectl) et dans Docker.
 
 .EXAMPLE
   .\scripts\verifier.ps1 -Atelier 7
   .\scripts\verifier.ps1 -Atelier 1,2,3,4,5,6
+  .\scripts\verifier.ps1 -Atelier 9
+  .\scripts\verifier.ps1 -Atelier 10
   pwsh ./scripts/verifier.ps1 -Atelier 8          # macOS, Linux
 #>
 param(
@@ -24,7 +28,7 @@ param(
 )
 . "$PSScriptRoot/commun.ps1"
 [int[]]$Atelier = @(($Atelier -join ",") -split "[,\s]+" | Where-Object { $_ } | ForEach-Object { [int]$_ })
-if (@($Atelier | Where-Object { $_ -lt 1 -or $_ -gt 8 }).Count) { throw "Ateliers de 1 à 8 : -Atelier 7, ou -Atelier 1,2,3" }
+if (@($Atelier | Where-Object { $_ -lt 1 -or $_ -gt 12 }).Count) { throw "Ateliers de 1 à 12 : -Atelier 9, ou -Atelier 1,2,3" }
 Set-Location $Racine
 
 $script:ko = 0
@@ -401,9 +405,11 @@ if ($Atelier -contains 8) {
     $ajoutees = @($noms | Where-Object { $fournies -notcontains $_ })
     Controle "Au moins deux alertes ajoutées ($($ajoutees -join ', '))" { $ajoutees.Count -ge 2 } "observability/regles/alertes.yaml"
     Controle "Une alerte lit le client témoin, une le compte data science" {
-        ($regles -match 'velocite_client_requests_total|velocite_client_') -and ($regles -match 'velocite_rows_exported_total')
+        ($regles -match 'velocite_client_requests_total|velocite_client_|velocite:echecs_client') -and ($regles -match 'velocite_rows_exported_total')
     } "les deux métriques de la fiche"
-    $tests = ((Texte "observability/tests/alertes_test.yaml") -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    # Le test de l'alerte sur objectif (atelier 9) est dans slo_test.yaml.
+    $tests = (((Texte "observability/tests/alertes_test.yaml") + "`n" + (Texte "observability/tests/slo_test.yaml")) -split "`r?`n" |
+        Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
     Controle "Un test par alerte ajoutée" {
         ($ajoutees.Count -ge 1) -and (@($ajoutees | Where-Object { $tests -notmatch "alertname:\s*$_\b" }).Count -eq 0)
     } "observability/tests/alertes_test.yaml : alertname de chaque alerte ajoutée"
@@ -435,6 +441,209 @@ if ($Atelier -contains 8) {
         (Section-Remplie "docs/ARCHITECTURE.md" "La supervision" "j1") -and (Section-Remplie "docs/PARAMETRES.md" "Les alertes" "j2") -and
         (Section-Remplie "docs/RUNBOOK.md" "Service indisponible" "j3")
     } "fiche de l'atelier 8"
+}
+
+
+# ------------------------------------------------------------------ atelier 9
+# Les alertes sur objectif : deux règles d'enregistrement (la part d'échecs
+# du client témoin sur 5 min et sur 1 h), l'alerte à deux fenêtres, son test.
+function Sans-Commentaires {
+    param([string]$Fichier)
+    # Sans l'aide (<# ... #>) ni les lignes de commentaire, qui citent déjà les
+    # commandes attendues.
+    $sans = [regex]::Replace((Texte $Fichier), '(?s)<#.*?#>', '')
+    return ($sans -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+}
+
+if ($Atelier -contains 9) {
+    Titre "Atelier 9 - Les alertes sur objectif (SLO)"
+    $enr = Sans-Commentaires "observability/regles/enregistrement.yaml"
+    $al = Sans-Commentaires "observability/regles/alertes.yaml"
+    $slo = Texte "observability/tests/slo_test.yaml"
+    Controle "enregistrement.yaml : velocite:echecs_client:ratio_rate5m et ratio_rate1h" {
+        ($enr -match 'record:\s*velocite:echecs_client:ratio_rate5m') -and ($enr -match 'record:\s*velocite:echecs_client:ratio_rate1h') -and
+        ($enr -match '\[5m\]') -and ($enr -match '\[1h\]') -and ($enr -match 'velocite_client_requests_total')
+    } "observability/regles/enregistrement.yaml : les deux noms exacts, par namespace et par route"
+    Controle "alertes.yaml : BudgetErreurConsommeVite, les deux fenêtres au-dessus de 14,4 %" {
+        ($al -match 'alert:\s*BudgetErreurConsommeVite') -and ($al -match 'ratio_rate1h\s*>\s*(14\.4|0\.144)') -and
+        ($al -match 'ratio_rate5m\s*>\s*(14\.4|0\.144)') -and ($al -match '\band\b')
+    } "expr : ratio_rate1h > 14.4 * 0.01 and ratio_rate5m > 14.4 * 0.01"
+    Controle "alertes.yaml : DisponibiliteSousObjectif retirée (une seule fenêtre)" {
+        $al -notmatch 'alert:\s*DisponibiliteSousObjectif'
+    } "BudgetErreurConsommeVite la remplace ; retirez aussi son test de alertes_test.yaml"
+    Controle "slo_test.yaml : les trois vérifications écrites (65, 72 et 76 min)" {
+        ($slo -notmatch 'A FAIRE \(atelier 9\)') -and ($slo -match 'eval_time:\s*65m') -and ($slo -match 'eval_time:\s*72m') -and
+        ($slo -match 'eval_time:\s*76m') -and ([regex]::Matches($slo, 'alertname:\s*BudgetErreurConsommeVite').Count -ge 3)
+    } "observability/tests/slo_test.yaml : le modèle est en commentaire dans le fichier"
+    Controle "promtool check rules : SUCCESS (enregistrement et alertes)" {
+        (Lancer "$PSScriptRoot/promtool.ps1" @("check", "rules", "observability/regles/enregistrement.yaml", "observability/regles/alertes.yaml")).Code -eq 0
+    } "./scripts/promtool.ps1 check rules observability/regles/enregistrement.yaml ; Docker démarré ?"
+    Controle "promtool test rules : SUCCESS (slo_test et alertes_test)" {
+        ((Lancer "$PSScriptRoot/promtool.ps1" @("test", "rules", "observability/tests/slo_test.yaml")).Code -eq 0) -and
+        ((Lancer "$PSScriptRoot/promtool.ps1" @("test", "rules", "observability/tests/alertes_test.yaml")).Code -eq 0)
+    } "./scripts/promtool.ps1 test rules observability/tests/slo_test.yaml : FAILED dit l'instant (time), l'attendu (exp) et l'obtenu (got)"
+    Controle "Les règles chargées dans Prometheus (l'alerte et les deux enregistrements)" {
+        $r = Lancer kubectl @("get", "--raw", "/api/v1/namespaces/observabilite/services/prometheus-server:80/proxy/api/v1/rules")
+        ($r.Code -eq 0) -and ($r.Texte -match '"BudgetErreurConsommeVite"') -and ($r.Texte -match 'velocite:echecs_client:ratio_rate1h')
+    } "tofu -chdir=infra/10-outils apply (poste léger : -var=leger=true), puis une minute"
+    Controle "RUNBOOK : la section Budget d'erreur consommé vite (ancre budget-erreur)" {
+        ((Texte "docs/RUNBOOK.md") -match 'id="budget-erreur"') -and (Section-Remplie "docs/RUNBOOK.md" "Budget d'erreur" "j4")
+    } "docs/RUNBOOK.md : <a id=`"budget-erreur`"></a>, puis ce qu'on voit, vérifier, agir, confirmer"
+    Controle "API de dev remise : prête, et diff vide" { (Deploiement-Pret "velocite-dev" "api") -and (Diff-Vide "dev") } "kubectl -n velocite-dev scale deployment/api --replicas=1"
+}
+
+
+# ------------------------------------------------------------------ atelier 10
+# Sauvegarder, détruire, restaurer : deux scripts, une sauvegarde hors de Git,
+# les lignes du bilan revenues, la procédure dans le runbook.
+if ($Atelier -contains 10) {
+    Titre "Atelier 10 - Sauvegarder, détruire, restaurer"
+    $sv = Sans-Commentaires "scripts/sauvegarder.ps1"
+    $rs = Sans-Commentaires "scripts/restaurer.ps1"
+    Controle "sauvegarder.ps1 et restaurer.ps1 : plus aucun A FAIRE" {
+        $sv -and $rs -and ((Texte "scripts/sauvegarder.ps1") -notmatch 'A FAIRE') -and ((Texte "scripts/restaurer.ps1") -notmatch 'A FAIRE')
+    } "scripts/sauvegarder.ps1, scripts/restaurer.ps1 : chaque A FAIRE devient une commande"
+    Controle "sauvegarder.ps1 : pg_dump dans le pod, puis kubectl cp vers le poste" {
+        ($sv -match 'pg_dump') -and ($sv -match '--clean') -and ($sv -match 'kubectl\s+cp')
+    } "pg_dump --clean --if-exists -f /tmp/sauvegarde.sql, puis kubectl cp vers sauvegardes/"
+    Controle "restaurer.ps1 : kubectl cp vers le pod, puis psql -f, arrêt à la première erreur" {
+        ($rs -match 'kubectl\s+cp') -and ($rs -match 'psql') -and ($rs -match 'ON_ERROR_STOP') -and ($rs -match '\s-f\s')
+    } "kubectl cp vers /tmp du pod, puis psql -v ON_ERROR_STOP=1 -f"
+    Controle "sauvegardes/ ignoré par Git, aucune sauvegarde suivie" {
+        ((Lancer git @("check-ignore", "-q", "sauvegardes/essai.sql")).Code -eq 0) -and -not (Lancer git @("ls-files", "sauvegardes")).Texte
+    } ".gitignore : sauvegardes/ ; git rm --cached sur le fichier suivi : il contient des données personnelles"
+    Controle "Au moins une sauvegarde dans sauvegardes/" {
+        @(Get-ChildItem -Path (Join-Path $Racine "sauvegardes") -Filter "*.sql" -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 }).Count -ge 1
+    } "./scripts/sauvegarder.ps1"
+    Controle "Les lignes du 12 mars sont dans daily_region_stats (après la restauration)" {
+        $r = Lancer kubectl @("-n", "velocite-dev", "exec", "-i", "statefulset/postgres", "--", "sh", "-c",
+                              'PGPASSWORD=$(cat /run/secrets/postgres_password) psql -U postgres -d velocite -At') `
+                              -Entree "SELECT count(*) FROM daily_region_stats WHERE jour = '2026-03-12';"
+        ($r.Code -eq 0) -and ([int]($r.Texte.Trim()) -gt 0)
+    } "./scripts/restaurer.ps1, puis ./scripts/compter-bilan.ps1"
+    Controle "RUNBOOK : la section Restauration des données (ancre restauration)" {
+        ((Texte "docs/RUNBOOK.md") -match 'id="restauration"') -and (Section-Remplie "docs/RUNBOOK.md" "Restauration" "j4")
+    } "docs/RUNBOOK.md : quand, la commande, ce qu'on doit voir, le RPO et le RTO mesurés"
+}
+
+
+# ------------------------------------------------------------------ atelier 11
+if ($Atelier -contains 11) {
+    Titre "Atelier 11 - Le même dépôt chez Hetzner, la couche écrite par vous (hors grille)"
+    # Les lignes de commentaire du modèle citent déjà les ports : on les retire.
+    $reseau = ((Texte "infra/00-cloud-hetzner/reseau.tf") -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Controle "reseau.tf : hcloud_firewall k3s, ports 22, 6443, 30443" {
+        ($reseau -match 'resource\s+"hcloud_firewall"\s+"k3s"') -and
+        (@("22", "6443", "30443" | Where-Object { ($reseau -notmatch "[`"']$_[`"']") -and ($reseau -notmatch "port\s*=\s*$_\b") }).Count -eq 0)
+    } "infra/00-cloud-hetzner/reseau.tf : le A FAIRE, noms exacts"
+    Controle "reseau.tf : ouvert à votre seule adresse (var.mon_ip), jamais à 0.0.0.0/0" {
+        ($reseau -match 'var\.mon_ip') -and ($reseau -notmatch '0\.0\.0\.0/0') -and ($reseau -notmatch '::/0')
+    } "source_ips = [var.mon_ip] sur chaque règle"
+    $calcul = ((Texte "infra/00-cloud-hetzner/calcul.tf") -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Controle "calcul.tf : hcloud_server.k3s, avec le pare-feu et le script de démarrage" {
+        ($calcul -match 'resource\s+"hcloud_server"\s+"k3s"') -and ($calcul -match 'firewall_ids\s*=\s*\[\s*hcloud_firewall\.k3s\.id\s*\]') -and
+        ($calcul -match 'templatefile\(') -and ($calcul -match 'user_data\.sh\.tftpl') -and ($calcul -match 'ubuntu-24\.04')
+    } "infra/00-cloud-hetzner/calcul.tf : le A FAIRE, noms exacts"
+    $ud = ((Texte "infra/00-cloud-hetzner/user_data.sh.tftpl") -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Controle "user_data.sh.tftpl : k3s installé, version épinglée, fichier témoin" {
+        ($ud -match 'get\.k3s\.io') -and ($ud -match 'INSTALL_K3S_VERSION="?\$\{version_k3s\}') -and ($ud -match '--tls-san') -and
+        ($ud -match 'velocite-pret')
+    } "infra/00-cloud-hetzner/user_data.sh.tftpl : le A FAIRE"
+    Controle "tofu validate de infra/00-cloud-hetzner" {
+        $couche = "infra/00-cloud-hetzner"
+        if (-not (Test-Path (Join-Path $Racine "$couche/.terraform"))) {
+            Lancer tofu @("-chdir=$couche", "init", "-backend=false", "-input=false") | Out-Null
+        }
+        (Lancer tofu @("-chdir=$couche", "validate")).Code -eq 0
+    } "tofu -chdir=infra/00-cloud-hetzner validate : le message dit la ligne"
+    Controle "Ni clé, ni state, ni token Hetzner suivis par Git" {
+        $suivis = (Lancer git @("ls-files", "infra/00-cloud-hetzner")).Texte -split "`n"
+        $fuite = @($suivis | Where-Object { $_ -match '/\.cles/|/\.env-cloud/|tfstate' })
+        # Un token Hetzner : 64 lettres et chiffres, majuscules comprises. Les
+        # empreintes du fichier de verrou sont en hexadécimal minuscule.
+        $g = Lancer git @("grep", "-I", "-h", "-o", "-E", "[A-Za-z0-9]{64,}", "--", ".", ":!*.lock.hcl")
+        $tokens = @($g.Texte -split "`n" | Where-Object { $_.Length -eq 64 -and $_ -cmatch '[A-Z]' -and $_ -cmatch '[a-z]' -and $_ -match '\d' })
+        ($fuite.Count -eq 0) -and ($tokens.Count -eq 0)
+    } "git rm --cached sur le fichier fautif ; un token poussé : prévenez l'intervenant, qui le révoque"
+    Controle "La machine est détruite : plus de contexte kubectl hetzner-" {
+        -not ((Lancer kubectl @("config", "get-contexts", "-o", "name")).Texte -match '(?m)^hetzner-')
+    } "./scripts/cloud.ps1 -Etape detruire"
+    Controle "docs/DEPLOIEMENT.md : une section Hetzner" {
+        (Texte "docs/DEPLOIEMENT.md") -match '(?m)^#+\s.*Hetzner'
+    } "ce que vous avez tapé, ce qu'on doit voir, ce qui diffère de kind"
+}
+
+# ------------------------------------------------------------------ atelier 12
+# La préparation du 30 novembre (non annoncée le 23 octobre) : up.ps1
+# complet et son contrôle, le tableau des preuves, la relecture croisée.
+# tofu plan -detailed-exitcode : 0 rien à faire, 2 des changements, 1 une
+# erreur. Le workspace passe par TF_WORKSPACE : le contrôle ne change pas le
+# workspace sélectionné de la couche.
+function Plan-Vide {
+    param([string]$Couche, [string[]]$Vars, [string]$Workspace)
+    if (-not $env:TF_VAR_phrase_etat) { return $false }
+    $avant = $env:TF_WORKSPACE
+    if ($Workspace) { $env:TF_WORKSPACE = $Workspace }
+    try {
+        $r = Lancer tofu (@("-chdir=$Couche", "plan", "-detailed-exitcode", "-input=false", "-lock=false") + $Vars)
+    } finally {
+        if ($null -eq $avant) { Remove-Item Env:\TF_WORKSPACE -ErrorAction SilentlyContinue } else { $env:TF_WORKSPACE = $avant }
+    }
+    return $r.Code -eq 0
+}
+
+if ($Atelier -contains 12) {
+    Titre "Préparation du 30 novembre - Une commande, la preuve"
+    $up = Texte "scripts/up.ps1"
+    # Le code seul : sans l'aide (<# ... #>) ni les commentaires, qui citent
+    # déjà les couches et les commandes attendues.
+    $upCode = (([regex]::Replace($up, '(?s)<#.*?#>', '')) -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Controle "up.ps1 : plus aucun A FAIRE" {
+        $up -and ($up -notmatch '(?m)^\s*#\s*A FAIRE')
+    } "scripts/up.ps1 : chaque A FAIRE devient une étape (Invoke-Etape)"
+    Controle "up.ps1 : outils, environnement, applications, bilan, tests de fumée" {
+        ($upCode -match 'infra/10-outils') -and ($upCode -match 'infra/20-env') -and ($upCode -match 'deploy/overlays') -and
+        ($upCode -match 'workflows') -and ($upCode -match 'smoke\.ps1')
+    } "les étapes de docs/DEPLOIEMENT.md, dans l'ordre"
+    Controle "up.ps1 -Controle : tofu plan -detailed-exitcode et kubectl diff" {
+        ($upCode -match 'if\s*\(\s*\$Controle') -and ($upCode -match 'detailed-exitcode') -and ($upCode -match '\bdiff\b')
+    } "si -Controle : un plan par couche (code 0), puis kubectl diff -k sur l'overlay (code 0)"
+    Controle "README.md, Les preuves : au moins six lignes, chacune avec sa commande" {
+        $l = Lignes-Section (Texte "README.md") "Les preuves"
+        $pleines = @($l | Where-Object { $_ -match '^\|' } | ForEach-Object {
+            $c = @($_.Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+            if ($c.Count -ge 3 -and $c[1] -and $c[2] -and $c[0] -ne "Ce qu'on affirme") { $_ }
+        })
+        ((Texte "README.md") -notmatch 'A FAIRE \((atelier 9|30 novembre)\)') -and ($pleines.Count -ge 6)
+    } "pour chaque affirmation : la commande et ce qu'elle doit afficher"
+    Controle "docs/DEPLOIEMENT.md : Tout monter, Tout détruire" {
+        (Section-Remplie "docs/DEPLOIEMENT.md" "3." "j2") -and (Section-Remplie "docs/DEPLOIEMENT.md" "6." "j2")
+    } "la commande unique, ce qu'on doit voir, et le démontage"
+    Controle "RELECTURE.md écrit par le binôme voisin" {
+        $f = @("RELECTURE.md", "docs/RELECTURE.md") | Where-Object { Test-Path (Join-Path $Racine $_) } | Select-Object -First 1
+        $f -and (@((Texte $f) -split "`r?`n" | Where-Object { $_.Trim() }).Count -ge 5)
+    } "la relecture croisée du 30 novembre : le voisin l'écrit dans votre dépôt"
+    if (-not $env:TF_VAR_phrase_etat) {
+        Write-Host "  `$env:TF_VAR_phrase_etat absente : les trois plans seront KO." -ForegroundColor DarkYellow
+    }
+    # Poste léger : un seul node (nb_workers=0), pas de Loki (leger=true).
+    $nodes = Kube-Json @("get", "nodes")
+    [string[]]$varsCluster = @()
+    if ($nodes -and @($nodes.items).Count -eq 1) { $varsCluster = @("-var=nb_workers=0") }
+    [string[]]$varsOutils = @()
+    if ($kubeOk -and -not (Kube-Json @("-n", "observabilite", "get", "statefulset", "loki"))) { $varsOutils = @("-var=leger=true") }
+    Controle "Un second passage ne change rien : infra/00-cluster" {
+        Plan-Vide "infra/00-cluster" $varsCluster
+    } "tofu -chdir=infra/00-cluster plan -detailed-exitcode : code 0 attendu ; `$env:TF_VAR_phrase_etat définie ?"
+    Controle "Un second passage ne change rien : infra/10-outils" {
+        Plan-Vide "infra/10-outils" $varsOutils
+    } "tofu -chdir=infra/10-outils plan -detailed-exitcode (poste léger : -var=leger=true)"
+    Controle "Un second passage ne change rien : infra/20-env, workspace dev" {
+        Plan-Vide "infra/20-env" @("-var-file=envs/dev.tfvars") "dev"
+    } "tofu -chdir=infra/20-env plan -detailed-exitcode -var-file=envs/dev.tfvars, workspace dev"
+    Controle "Un second passage ne change rien : deploy/overlays/dev (kubectl diff vide)" {
+        Diff-Vide "dev"
+    } "kubectl diff -k deploy/overlays/dev : rien ne doit s'afficher"
 }
 
 Write-Host ""

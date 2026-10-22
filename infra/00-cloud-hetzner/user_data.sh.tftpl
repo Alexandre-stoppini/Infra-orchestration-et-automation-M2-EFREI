@@ -1,0 +1,27 @@
+#!/bin/bash
+# Exécuté une fois, au premier démarrage de la machine (cloud-init).
+# Attention : chez Hetzner, une machine éteinte reste facturée. La fin de vie
+# passe par scripts/cloud.ps1 -Etape detruire, jamais par une extinction.
+set -euo pipefail
+
+# 1. Docker, pour construire les images VéloCité sur la machine.
+apt-get update -q
+apt-get install -y -q docker.io
+
+# 2. L'adresse publique, lue dans les métadonnées de Hetzner, pour le
+#    certificat de l'API Kubernetes.
+IP=$(curl -sS http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
+
+# 3. A FAIRE (atelier 11) : installer k3s, puis poser le fichier témoin.
+#    - Le script officiel : curl -sfL https://get.k3s.io | ... sh -s - server
+#    - La version épinglée vient d'OpenTofu : INSTALL_K3S_VERSION="${version_k3s}"
+#      (templatefile remplace ${version_k3s} avant que la machine ne démarre).
+#    - Les options du serveur k3s :
+#        --tls-san "$IP"            le certificat de l'API vaut pour l'adresse
+#                                   publique, sinon kubectl le refuse
+#        --disable traefik          VéloCité a son propre frontal
+#        --disable servicelb        le frontal est publié en NodePort, comme
+#                                   sur kind
+#        --write-kubeconfig-mode 0600
+#    - Enfin : touch /var/lib/velocite-pret. scripts/cloud.ps1 attend ce
+#      fichier pour savoir que la machine est prête.
